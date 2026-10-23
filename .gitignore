@@ -1,0 +1,14 @@
+# Never commit service account keys
+*.json
+!composer.json
+!package.json
+
+# Build output
+/dist/
+*.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
