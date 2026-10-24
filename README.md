@@ -5,6 +5,7 @@
 ## امکانات
 
 - **ارسال خودکار:** هنگام انتشار/ویرایش ← `URL_UPDATED`؛ هنگام حذف، لغو انتشار یا تغییر نامک ← `URL_DELETED` برای آدرس قدیمی
+- **صف ارسال:** فایل اکسل/CSV صفحات ایندکس‌نشده (مثلاً خروجی Search Console) را بارگذاری کنید؛ آدرس‌ها ذخیره و هر روز تا سقف تعیین‌شده خودکار ارسال می‌شوند. اگر گوگل خطای 429 یا دسترسی بدهد، ارسال تا روز بعد متوقف می‌شود و چیزی از صف کم نمی‌شود.
 - **داشبورد:** مصرف سهمیه امروز، نرخ موفقیت ۲۴ ساعت، فعالیت‌های اخیر، چک‌لیست راه‌اندازی
 - **ارسال گروهی:** تا صدها آدرس با نوار پیشرفت، توقف، و نتیجه جداگانه برای هر آدرس؛ بررسی وضعیت (`urlNotifications.metadata`)
 - **تنظیمات:** بارگذاری کلید سرویس اکانت با کشیدن و رها کردن و اعتبارسنجی فوری، انتخاب نوع محتوا، سقف روزانه
@@ -42,6 +43,7 @@ define( 'SGIA_KEY_FILE', '/home/USER/keys/indexing-service-account.json' );
 simple-google-indexing-api.php   فایل اصلی افزونه
 includes/class-sgia-api.php      احراز هویت، ارسال، سهمیه، لاگ
 includes/class-sgia-auto.php     ارسال خودکار هنگام انتشار/حذف
+includes/class-sgia-queue.php    صف ارسال: جدول، خواندن xlsx/csv، ارسال زمان‌بندی‌شده
 includes/class-sgia-admin.php    صفحات مدیریت، AJAX، متاباکس، ستون لیست
 assets/admin.css, admin.js       رابط کاربری
 uninstall.php                    پاک‌سازی داده‌ها هنگام حذف افزونه
@@ -52,7 +54,7 @@ uninstall.php                    پاک‌سازی داده‌ها هنگام ح
 شماره نسخه را در `simple-google-indexing-api.php` (هدر و ثابت `SGIA_VERSION`) و `readme.txt` به‌روز کنید، سپس یک تگ بزنید:
 
 ```bash
-git tag v2.0.1 && git push origin v2.0.1
+git tag v2.1.1 && git push origin v2.1.1
 ```
 
 GitHub Actions سینتکس PHP را بررسی می‌کند و فایل zip قابل نصب را به Release اضافه می‌کند.

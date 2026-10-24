@@ -4,7 +4,7 @@ Tags: google, indexing api, seo, search console, index
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.0.0
+Stable tag: 2.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,7 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 == Description ==
 
 * ارسال خودکار URL_UPDATED هنگام انتشار/ویرایش و URL_DELETED هنگام حذف، لغو انتشار یا تغییر نامک
+* صف ارسال: بارگذاری فایل اکسل/CSV (مثلاً خروجی «صفحات ایندکس‌نشده» Search Console) و ارسال خودکار روزانه تا سقف تعیین‌شده
 * داشبورد با مصرف سهمیه روزانه، نرخ موفقیت و فعالیت‌های اخیر
 * ارسال گروهی تا صدها آدرس با نوار پیشرفت، توقف و نتیجه جداگانه برای هر آدرس
 * بررسی وضعیت آدرس (urlNotifications.metadata)
@@ -35,6 +36,13 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 define( 'SGIA_KEY_FILE', '/path/outside/public_html/key.json' );
 
 == Changelog ==
+
+= 2.1.0 =
+* تب جدید «صف ارسال»: بارگذاری xlsx / csv / txt یا چسباندن آدرس‌ها، خواندن همه شیت‌ها، حذف تکراری‌ها و آدرس‌های دامنه‌های دیگر
+* ارسال خودکار هر ۱۵ دقیقه تا سقف روزانه قابل تنظیم، با ذخیره بخشی از سهمیه برای نوشته‌های تازه
+* توقف خودکار تا روز بعد در صورت خطای 429 یا مشکل دسترسی، بدون از دست رفتن آدرس‌ها
+* جدول صف با فیلتر وضعیت، جستجو، صفحه‌بندی، حذف تکی، تلاش دوباره ناموفق‌ها
+* رفع: خطای جاوااسکریپت در صفحاتی غیر از گزارش‌ها که جدول داشتند
 
 = 2.0.0 =
 * رابط کاربری کامل: داشبورد، ارسال گروهی AJAX، تنظیمات با dropzone، گزارش با فیلتر و CSV

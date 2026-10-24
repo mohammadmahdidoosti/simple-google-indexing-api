@@ -364,7 +364,7 @@ final class SGIA_API {
 	 * Quota (resets at midnight America/Los_Angeles, like Google's)
 	 * ------------------------------------------------------------------ */
 
-	private static function pacific_day() {
+	public static function pacific_day() {
 		$dt = new DateTime( 'now', new DateTimeZone( 'America/Los_Angeles' ) );
 		return $dt->format( 'Y-m-d' );
 	}

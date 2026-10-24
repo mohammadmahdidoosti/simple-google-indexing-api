@@ -24,7 +24,7 @@ final class SGIA_Admin {
 		add_action( 'admin_post_sgia_export', [ __CLASS__, 'export_csv' ] );
 		add_filter( 'plugin_action_links_' . plugin_basename( SGIA_FILE ), [ __CLASS__, 'action_links' ] );
 
-		foreach ( [ 'submit', 'test', 'save_settings', 'delete_key', 'recent', 'clear_log', 'post_send' ] as $a ) {
+		foreach ( [ 'submit', 'test', 'save_settings', 'delete_key', 'recent', 'clear_log', 'post_send', 'queue_import', 'queue_save', 'queue_run', 'queue_action' ] as $a ) {
 			add_action( "wp_ajax_sgia_{$a}", [ __CLASS__, "ajax_{$a}" ] );
 		}
 	}
@@ -83,7 +83,7 @@ final class SGIA_Admin {
 	}
 
 	private static function source_label( $source ) {
-		$map = [ 'auto' => 'خودکار', 'manual' => 'دستی', 'bulk' => 'گروهی', 'post' => 'ویرایشگر' ];
+		$map = [ 'auto' => 'خودکار', 'manual' => 'دستی', 'bulk' => 'گروهی', 'post' => 'ویرایشگر', 'queue' => 'صف' ];
 		return isset( $map[ $source ] ) ? $map[ $source ] : '—';
 	}
 
@@ -151,6 +151,7 @@ final class SGIA_Admin {
 		$tabs = [
 			'dashboard' => [ 'داشبورد', 'dashicons-chart-area' ],
 			'submit'    => [ 'ارسال', 'dashicons-upload' ],
+			'queue'     => [ 'صف ارسال', 'dashicons-backup' ],
 			'settings'  => [ 'تنظیمات', 'dashicons-admin-generic' ],
 			'log'       => [ 'گزارش‌ها', 'dashicons-list-view' ],
 		];
@@ -158,7 +159,8 @@ final class SGIA_Admin {
 		if ( ! isset( $tabs[ $tab ] ) ) {
 			$tab = 'dashboard';
 		}
-		$q = SGIA_API::quota();
+		$q       = SGIA_API::quota();
+		$pending = SGIA_Queue::counts()['pending'];
 		?>
 		<div class="wrap sgia">
 			<header class="sgia-header">
@@ -181,6 +183,7 @@ final class SGIA_Admin {
 				<?php foreach ( $tabs as $key => $t ) : ?>
 					<a href="<?php echo esc_url( self::page_url( $key ) ); ?>" class="sgia-tab<?php echo $key === $tab ? ' is-active' : ''; ?>" <?php echo $key === $tab ? 'aria-current="page"' : ''; ?>>
 						<span class="dashicons <?php echo esc_attr( $t[1] ); ?>"></span><?php echo esc_html( $t[0] ); ?>
+						<?php if ( 'queue' === $key && $pending ) : ?><b class="sgia-tab__badge"><?php echo esc_html( self::fa( number_format( $pending ) ) ); ?></b><?php endif; ?>
 					</a>
 				<?php endforeach; ?>
 			</nav>
@@ -295,6 +298,8 @@ final class SGIA_Admin {
 					<div class="sgia-card__head"><h2>میان‌بُرها</h2></div>
 					<div class="sgia-quick">
 						<a class="sgia-btn sgia-btn--primary sgia-btn--block" href="<?php echo esc_url( self::page_url( 'submit' ) ); ?>"><span class="dashicons dashicons-upload"></span>ارسال دستی آدرس‌ها</a>
+						<?php $qc = SGIA_Queue::counts(); ?>
+						<a class="sgia-btn sgia-btn--block" href="<?php echo esc_url( self::page_url( 'queue' ) ); ?>"><span class="dashicons dashicons-backup"></span>صف ارسال<?php echo $qc['pending'] ? esc_html( ' (' . self::fa( number_format( $qc['pending'] ) ) . ' در انتظار)' ) : ''; ?></a>
 						<button type="button" class="sgia-btn sgia-btn--block" data-sgia-test <?php disabled( ! $has ); ?>><span class="dashicons dashicons-yes-alt"></span>تست اتصال</button>
 						<a class="sgia-btn sgia-btn--ghost sgia-btn--block" href="https://search.google.com/search-console" target="_blank" rel="noopener"><span class="dashicons dashicons-external"></span>Search Console</a>
 					</div>
@@ -378,6 +383,244 @@ final class SGIA_Admin {
 			<p>برای ارسال درخواست به گوگل، فایل JSON سرویس اکانت لازم است.</p>
 			<a class="sgia-btn sgia-btn--primary" href="<?php echo esc_url( self::page_url( 'settings' ) ); ?>">رفتن به تنظیمات</a>
 		</section>
+		<?php
+	}
+
+	/* ------------------------------------------------------------------ *
+	 * Tab: queue
+	 * ------------------------------------------------------------------ */
+
+	private static function gmt_ts( $mysql ) {
+		return $mysql ? strtotime( $mysql . ' UTC' ) : 0;
+	}
+
+	private static function tab_queue() {
+		// phpcs:disable WordPress.Security.NonceVerification -- read-only list filters
+		$status = isset( $_GET['qstatus'] ) ? sanitize_key( wp_unslash( $_GET['qstatus'] ) ) : '';
+		$search = isset( $_GET['qs'] ) ? sanitize_text_field( wp_unslash( $_GET['qs'] ) ) : '';
+		$page   = isset( $_GET['qpage'] ) ? max( 1, absint( $_GET['qpage'] ) ) : 1;
+		// phpcs:enable
+
+		$c     = SGIA_Queue::counts();
+		$s     = SGIA_Queue::settings();
+		$limit = SGIA_API::settings()['daily_limit'];
+		$today = SGIA_Queue::sent_today();
+		$halt  = SGIA_Queue::halted();
+		$next  = wp_next_scheduled( SGIA_Queue::CRON );
+		$per   = 50;
+		$list  = SGIA_Queue::rows( $status, $search, $page, $per );
+		$pages = max( 1, (int) ceil( $list['total'] / $per ) );
+		$days  = $c['pending'] ? (int) ceil( $c['pending'] / $s['cap'] ) : 0;
+		$pct   = $c['total'] ? (int) round( $c['sent'] * 100 / $c['total'] ) : 0;
+		$host  = SGIA_Queue::site_host();
+		$base  = add_query_arg( array_filter( [ 'qstatus' => $status, 'qs' => $search ] ), self::page_url( 'queue' ) );
+		?>
+		<div id="sgia-queue">
+
+		<?php if ( ! SGIA_API::has_key() ) : ?>
+			<div class="sgia-alert sgia-alert--warn sgia-alert--top">کلید سرویس اکانت تنظیم نشده؛ می‌توانید فهرست را اضافه کنید، ولی ارسال بعد از <a href="<?php echo esc_url( self::page_url( 'settings' ) ); ?>">تنظیم کلید</a> شروع می‌شود.</div>
+		<?php elseif ( $halt ) : ?>
+			<div class="sgia-alert sgia-alert--fail sgia-alert--top">
+				<strong>ارسال صف برای امروز متوقف شده:</strong> <?php echo esc_html( $halt ); ?>
+				<span class="sgia-alert__sub">بعد از ریست سهمیه گوگل خودکار ادامه پیدا می‌کند. اگر مشکل دسترسی را برطرف کرده‌اید، «ارسال یک دسته الان» را بزنید.</span>
+			</div>
+		<?php endif; ?>
+
+		<div class="sgia-stats">
+			<section class="sgia-card sgia-stat">
+				<span class="sgia-stat__label">در انتظار ارسال</span>
+				<strong class="sgia-stat__value"><?php echo esc_html( self::fa( number_format( $c['pending'] ) ) ); ?></strong>
+				<span class="sgia-stat__sub">از <?php echo esc_html( self::fa( number_format( $c['total'] ) ) ); ?> آدرس در صف</span>
+			</section>
+			<section class="sgia-card sgia-stat">
+				<span class="sgia-stat__label">ارسال‌شده</span>
+				<strong class="sgia-stat__value"><?php echo esc_html( self::fa( number_format( $c['sent'] ) ) ); ?><small> · <?php echo esc_html( self::fa( $pct ) ); ?>٪</small></strong>
+				<span class="sgia-meter"><i class="is-ok" style="width:<?php echo (int) $pct; ?>%"></i></span>
+				<span class="sgia-stat__sub">ناموفق: <?php echo esc_html( self::fa( $c['failed'] ) ); ?></span>
+			</section>
+			<section class="sgia-card sgia-stat">
+				<span class="sgia-stat__label">ارسال امروز از صف</span>
+				<strong class="sgia-stat__value"><?php echo esc_html( self::fa( $today ) ); ?><small> / <?php echo esc_html( self::fa( $s['cap'] ) ); ?></small></strong>
+				<span class="sgia-meter"><i style="width:<?php echo (int) min( 100, round( $today * 100 / $s['cap'] ) ); ?>%"></i></span>
+				<span class="sgia-stat__sub">ریست سهمیه در <?php echo esc_html( self::until( SGIA_API::quota()['reset_at'] ) ); ?> دیگر</span>
+			</section>
+			<section class="sgia-card sgia-stat">
+				<span class="sgia-stat__label">پایان تقریبی</span>
+				<strong class="sgia-stat__value">
+					<?php if ( ! $c['pending'] ) : ?>
+						<span class="sgia-badge sgia-badge--ok">صف خالی است</span>
+					<?php else : ?>
+						<?php echo esc_html( self::fa( $days ) ); ?><small> روز</small>
+					<?php endif; ?>
+				</strong>
+				<span class="sgia-stat__sub">
+					<?php echo $s['active'] ? esc_html( 'روزانه ' . self::fa( $s['cap'] ) . ' آدرس' ) : '<span class="sgia-badge sgia-badge--muted">متوقف</span>'; ?>
+				</span>
+			</section>
+		</div>
+
+		<div class="sgia-split sgia-split--wide">
+			<section class="sgia-card">
+				<div class="sgia-card__head">
+					<div>
+						<h2>افزودن فهرست به صف</h2>
+						<p>خروجی اکسل Search Console را مستقیم بارگذاری کنید: Pages ← Not indexed ← یک دلیل ← Export ← Download Excel.</p>
+					</div>
+				</div>
+
+				<label class="sgia-drop" id="sgia-q-drop" for="sgia-q-file">
+					<input type="file" id="sgia-q-file" accept=".xlsx,.csv,.txt,.tsv" hidden>
+					<span class="sgia-drop__icon"><?php echo self::icon( 'upload' ); // phpcs:ignore ?></span>
+					<strong>فایل اکسل یا CSV را اینجا رها کنید</strong>
+					<span>xlsx، csv یا txt — همه شیت‌ها و ستون‌ها خوانده می‌شوند</span>
+				</label>
+
+				<div class="sgia-file-chip" id="sgia-q-picked" hidden>
+					<span class="dashicons dashicons-media-spreadsheet"></span>
+					<span class="sgia-file-chip__name" data-name></span>
+					<span class="sgia-file-chip__size" data-size></span>
+					<button type="button" class="sgia-icon-btn sgia-icon-btn--sm" data-sgia-q-unpick title="حذف فایل"><span class="dashicons dashicons-no-alt"></span></button>
+				</div>
+
+				<details class="sgia-details">
+					<summary>یا آدرس‌ها را مستقیم بچسبانید</summary>
+					<textarea id="sgia-q-text" rows="5" dir="ltr" spellcheck="false" placeholder="<?php echo esc_attr( home_url( '/product/a/' ) . "\n" . home_url( '/product/b/' ) ); ?>"></textarea>
+				</details>
+
+				<ul class="sgia-rules">
+					<li>فقط آدرس‌های دامنه <code dir="ltr"><?php echo esc_html( $host ); ?></code> نگه داشته می‌شوند.</li>
+					<li>آدرس‌های تکراری و آدرس‌هایی که قبلاً در صف بوده‌اند دوباره اضافه نمی‌شوند.</li>
+					<li>ترتیب ارسال، همان ترتیب فایل است.</li>
+				</ul>
+
+				<div class="sgia-actions">
+					<button type="button" class="sgia-btn sgia-btn--primary sgia-btn--lg" id="sgia-q-import" disabled><span class="dashicons dashicons-plus-alt2"></span>افزودن به صف</button>
+				</div>
+			</section>
+
+			<aside class="sgia-card">
+				<div class="sgia-card__head"><h2>زمان‌بندی ارسال</h2></div>
+				<form id="sgia-q-settings" autocomplete="off">
+					<label class="sgia-switch-row">
+						<span>
+							<strong>ارسال خودکار روزانه</strong>
+							<small>هر ۱۵ دقیقه یک دسته تا سقف روزانه</small>
+						</span>
+						<span class="sgia-switch">
+							<input type="checkbox" name="active" value="1" <?php checked( $s['active'], 1 ); ?>>
+							<i></i>
+						</span>
+					</label>
+
+					<div class="sgia-field-group">
+						<label class="sgia-field-group__label" for="sgia-q-per-day">سقف ارسال روزانه از صف</label>
+						<div class="sgia-input-suffix">
+							<input type="number" id="sgia-q-per-day" name="per_day" min="1" max="<?php echo (int) $limit; ?>" value="<?php echo (int) $s['per_day']; ?>" dir="ltr">
+							<span>از <?php echo esc_html( self::fa( $limit ) ); ?></span>
+						</div>
+						<p class="sgia-help">
+							<?php echo esc_html( 'باقی‌مانده سهمیه (' . self::fa( max( 0, $limit - $s['cap'] ) ) . ' درخواست) برای ارسال خودکار نوشته‌های تازه آزاد می‌ماند.' ); ?>
+						</p>
+					</div>
+
+					<dl class="sgia-kv">
+						<div><dt>اجرای بعدی</dt><dd><?php echo $next ? esc_html( self::until( $next ) . ' دیگر' ) : '—'; ?></dd></div>
+						<div><dt>هر اجرا</dt><dd>حداکثر <?php echo esc_html( self::fa( SGIA_Queue::BATCH ) ); ?> آدرس</dd></div>
+					</dl>
+
+					<div class="sgia-quick">
+						<button type="submit" class="sgia-btn sgia-btn--primary sgia-btn--block"><span data-label>ذخیره زمان‌بندی</span></button>
+						<button type="button" class="sgia-btn sgia-btn--block" data-sgia-q-run <?php disabled( ! $c['pending'] || ! SGIA_API::has_key() ); ?>><span class="dashicons dashicons-controls-play"></span>ارسال یک دسته الان</button>
+					</div>
+				</form>
+			</aside>
+		</div>
+
+		<section class="sgia-card sgia-log">
+			<div class="sgia-toolbar">
+				<nav class="sgia-segment sgia-segment--sm" aria-label="فیلتر وضعیت">
+					<?php
+					$filters = [
+						''        => [ 'همه', $c['total'] ],
+						'pending' => [ 'در صف', $c['pending'] ],
+						'sent'    => [ 'ارسال‌شده', $c['sent'] ],
+						'failed'  => [ 'ناموفق', $c['failed'] ],
+					];
+					foreach ( $filters as $key => $f ) :
+						$url = add_query_arg( array_filter( [ 'qstatus' => $key, 'qs' => $search ] ), self::page_url( 'queue' ) );
+						?>
+						<a href="<?php echo esc_url( $url ); ?>" class="<?php echo $key === $status ? 'is-active' : ''; ?>"><?php echo esc_html( $f[0] ); ?> <b><?php echo esc_html( self::fa( number_format( $f[1] ) ) ); ?></b></a>
+					<?php endforeach; ?>
+				</nav>
+
+				<form class="sgia-search" method="get" action="<?php echo esc_url( admin_url( 'admin.php' ) ); ?>">
+					<input type="hidden" name="page" value="<?php echo esc_attr( self::SLUG ); ?>">
+					<input type="hidden" name="tab" value="queue">
+					<?php if ( $status ) : ?><input type="hidden" name="qstatus" value="<?php echo esc_attr( $status ); ?>"><?php endif; ?>
+					<span class="dashicons dashicons-search"></span>
+					<input type="search" name="qs" value="<?php echo esc_attr( $search ); ?>" placeholder="جستجو در آدرس‌ها…">
+				</form>
+
+				<div class="sgia-toolbar__end">
+					<?php if ( $c['failed'] ) : ?>
+						<button type="button" class="sgia-btn sgia-btn--sm" data-sgia-q-op="retry"><span class="dashicons dashicons-update"></span>تلاش دوباره ناموفق‌ها</button>
+					<?php endif; ?>
+					<button type="button" class="sgia-btn sgia-btn--sm" data-sgia-q-op="clear_sent" data-confirm="آدرس‌های ارسال‌شده از جدول حذف شوند؟" <?php disabled( ! $c['sent'] ); ?>>پاک کردن ارسال‌شده‌ها</button>
+					<button type="button" class="sgia-btn sgia-btn--sm sgia-btn--danger" data-sgia-q-op="clear_all" data-confirm="کل صف (همه آدرس‌ها) حذف شود؟ این کار قابل برگشت نیست." <?php disabled( ! $c['total'] ); ?>>خالی کردن صف</button>
+				</div>
+			</div>
+
+			<?php if ( ! $list['rows'] ) : ?>
+				<div class="sgia-empty">
+					<span class="dashicons dashicons-backup"></span>
+					<p><?php echo $c['total'] ? 'موردی با این فیلتر پیدا نشد.' : 'صف خالی است. فایل اکسل صفحات ایندکس‌نشده را بارگذاری کنید.'; ?></p>
+				</div>
+			<?php else : ?>
+				<div class="sgia-table-wrap">
+					<table class="sgia-table">
+						<thead><tr><th>وضعیت</th><th>آدرس</th><th>زمان</th><th>پیام</th><th><span class="screen-reader-text">عملیات</span></th></tr></thead>
+						<tbody>
+						<?php
+						$labels = [ 'pending' => [ 'در صف', 'muted' ], 'sent' => [ 'ارسال شد', 'ok' ], 'failed' => [ 'ناموفق', 'fail' ] ];
+						foreach ( $list['rows'] as $r ) :
+							$lb = isset( $labels[ $r->status ] ) ? $labels[ $r->status ] : [ $r->status, 'muted' ];
+							$ts = 'sent' === $r->status ? self::gmt_ts( $r->sent_at ) : self::gmt_ts( $r->added_at );
+							?>
+							<tr data-row="<?php echo (int) $r->id; ?>">
+								<td><span class="sgia-badge sgia-badge--<?php echo esc_attr( $lb[1] ); ?>"><?php echo esc_html( $lb[0] ); ?><?php echo $r->last_code ? ' · ' . (int) $r->last_code : ''; ?></span></td>
+								<td class="sgia-table__url" dir="ltr"><a href="<?php echo esc_url( $r->url ); ?>" target="_blank" rel="noopener"><?php echo esc_html( self::display_url( $r->url ) ); ?></a></td>
+								<td title="<?php echo esc_attr( wp_date( 'Y-m-d H:i', $ts ) ); ?>"><?php echo esc_html( ( 'sent' === $r->status ? 'ارسال: ' : 'افزوده: ' ) . self::ago( $ts ) ); ?></td>
+								<td class="sgia-table__msg">
+									<?php if ( $r->last_error ) : ?>
+										<span><?php echo esc_html( $r->last_error ); ?></span>
+										<?php if ( (int) $r->attempts > 1 ) : ?><small class="sgia-muted">(<?php echo esc_html( self::fa( $r->attempts ) ); ?> تلاش)</small><?php endif; ?>
+									<?php else : ?>
+										<span class="sgia-muted">—</span>
+									<?php endif; ?>
+								</td>
+								<td><button type="button" class="sgia-icon-btn sgia-icon-btn--sm" data-sgia-q-op="delete" data-id="<?php echo (int) $r->id; ?>" title="حذف از صف"><span class="dashicons dashicons-trash"></span></button></td>
+							</tr>
+						<?php endforeach; ?>
+						</tbody>
+					</table>
+				</div>
+
+				<?php if ( $pages > 1 ) : ?>
+					<nav class="sgia-pages" aria-label="صفحه‌بندی">
+						<span class="sgia-pages__info"><?php echo esc_html( 'صفحه ' . self::fa( $page ) . ' از ' . self::fa( $pages ) . ' · ' . self::fa( number_format( $list['total'] ) ) . ' آدرس' ); ?></span>
+						<span class="sgia-pages__links">
+							<?php if ( $page > 1 ) : ?>
+								<a class="sgia-btn sgia-btn--sm" href="<?php echo esc_url( add_query_arg( 'qpage', $page - 1, $base ) ); ?>">→ قبلی</a>
+							<?php endif; ?>
+							<?php if ( $page < $pages ) : ?>
+								<a class="sgia-btn sgia-btn--sm" href="<?php echo esc_url( add_query_arg( 'qpage', $page + 1, $base ) ); ?>">بعدی ←</a>
+							<?php endif; ?>
+						</span>
+					</nav>
+				<?php endif; ?>
+			<?php endif; ?>
+		</section>
+		</div>
 		<?php
 	}
 
@@ -902,6 +1145,100 @@ final class SGIA_Admin {
 		self::guard_ajax();
 		SGIA_API::clear_log();
 		wp_send_json_success( [ 'ok' => true, 'msg' => 'گزارش‌ها پاک شد.' ] );
+	}
+
+	/* ------------------------------------------------------------------ *
+	 * AJAX: queue
+	 * ------------------------------------------------------------------ */
+
+	public static function ajax_queue_import() {
+		self::guard_ajax();
+
+		if ( ! empty( $_FILES['file']['tmp_name'] ) ) {
+			$f = $_FILES['file']; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+			if ( ! empty( $f['error'] ) || ! is_uploaded_file( $f['tmp_name'] ) ) {
+				wp_send_json_success( [ 'ok' => false, 'msg' => 'بارگذاری فایل ناموفق بود.', 'hint' => 'حجم فایل را بررسی کنید (حداکثر ۱۰ مگابایت).' ] );
+			}
+			$urls = SGIA_Queue::read_file( $f['tmp_name'], sanitize_file_name( $f['name'] ) );
+		} else {
+			$urls = SGIA_Queue::extract_urls( isset( $_POST['text'] ) ? wp_unslash( $_POST['text'] ) : '' ); // phpcs:ignore
+		}
+
+		if ( is_wp_error( $urls ) ) {
+			wp_send_json_success( [ 'ok' => false, 'msg' => $urls->get_error_message(), 'hint' => '' ] );
+		}
+		if ( ! $urls ) {
+			wp_send_json_success( [ 'ok' => false, 'msg' => 'هیچ آدرسی در فایل پیدا نشد.', 'hint' => 'آدرس‌ها باید کامل و با http:// یا https:// شروع شوند.' ] );
+		}
+
+		$r     = SGIA_Queue::import( $urls );
+		$parts = [];
+		if ( $r['duplicate'] ) {
+			$parts[] = self::fa( number_format( $r['duplicate'] ) ) . ' تکراری';
+		}
+		if ( $r['foreign'] ) {
+			$parts[] = self::fa( number_format( $r['foreign'] ) ) . ' مربوط به دامنه دیگر (' . $r['foreign_host'] . ')';
+		}
+		if ( $r['invalid'] ) {
+			$parts[] = self::fa( number_format( $r['invalid'] ) ) . ' نامعتبر';
+		}
+		$hint = $parts ? 'کنار گذاشته شد: ' . implode( '، ', $parts ) : '';
+		if ( $r['truncated'] ) {
+			$hint .= ( $hint ? ' — ' : '' ) . 'فقط ' . self::fa( number_format( SGIA_Queue::MAX_IMPORT ) ) . ' آدرس اول فایل خوانده شد.';
+		}
+
+		$msg = $r['added']
+			? self::fa( number_format( $r['added'] ) ) . ' آدرس به صف اضافه شد.'
+			: ( $r['duplicate'] ? 'همه آدرس‌ها از قبل در صف بودند.' : 'آدرس قابل قبولی برای این سایت پیدا نشد.' );
+
+		wp_send_json_success( [ 'ok' => $r['added'] > 0 || $r['duplicate'] > 0, 'added' => $r['added'], 'msg' => $msg, 'hint' => $hint ] );
+	}
+
+	public static function ajax_queue_save() {
+		self::guard_ajax();
+		SGIA_Queue::update_settings( ! empty( $_POST['active'] ), isset( $_POST['per_day'] ) ? absint( $_POST['per_day'] ) : 180 );
+		$s     = SGIA_Queue::settings();
+		$limit = SGIA_API::settings()['daily_limit'];
+		$hint  = $s['per_day'] > $limit ? 'سقف صف از سقف کل روزانه (' . self::fa( $limit ) . ') بیشتر است؛ عملاً ' . self::fa( $limit ) . ' در نظر گرفته می‌شود.' : '';
+		wp_send_json_success( [ 'ok' => true, 'msg' => 'زمان‌بندی ذخیره شد.', 'hint' => $hint ] );
+	}
+
+	public static function ajax_queue_run() {
+		self::guard_ajax();
+		$r = SGIA_Queue::run( true );
+		wp_send_json_success( [
+			'ok'    => $r['ok'],
+			'sent'  => $r['sent'],
+			'msg'   => strtr( $r['msg'], [ '0' => '۰', '1' => '۱', '2' => '۲', '3' => '۳', '4' => '۴', '5' => '۵', '6' => '۶', '7' => '۷', '8' => '۸', '9' => '۹' ] ),
+			'quota' => SGIA_API::quota(),
+		] );
+	}
+
+	public static function ajax_queue_action() {
+		self::guard_ajax();
+		$op = isset( $_POST['op'] ) ? sanitize_key( wp_unslash( $_POST['op'] ) ) : '';
+
+		switch ( $op ) {
+			case 'retry':
+				$n   = SGIA_Queue::retry_failed();
+				$msg = self::fa( $n ) . ' آدرس دوباره به صف برگشت.';
+				break;
+			case 'clear_sent':
+				$n   = SGIA_Queue::clear( 'sent' );
+				$msg = self::fa( number_format( $n ) ) . ' آدرس ارسال‌شده پاک شد.';
+				break;
+			case 'clear_all':
+				$n   = SGIA_Queue::clear();
+				$msg = 'صف خالی شد.';
+				break;
+			case 'delete':
+				$n   = SGIA_Queue::delete_row( isset( $_POST['id'] ) ? absint( $_POST['id'] ) : 0 );
+				$msg = $n ? 'از صف حذف شد.' : 'این مورد پیدا نشد.';
+				break;
+			default:
+				wp_send_json_success( [ 'ok' => false, 'msg' => 'عملیات نامعتبر.' ] );
+		}
+		wp_send_json_success( [ 'ok' => true, 'msg' => $msg, 'reload' => 'delete' !== $op ] );
 	}
 
 	/* ------------------------------------------------------------------ *
