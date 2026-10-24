@@ -230,14 +230,14 @@
 			countInvalid.hidden = !p.invalid;
 			countInvalid.textContent = fa(p.invalid) + ' نامعتبر';
 
-			var over = type !== 'status' && p.valid.length > C.quota.remaining;
+			var over = (type === 'update' || type === 'delete') && p.valid.length > C.quota.remaining;
 			quotaWarn.hidden = !over;
 			if (over) {
 				quotaWarn.textContent = 'فقط ' + fa(C.quota.remaining) + ' درخواست از سهمیه امروز باقی مانده؛ ' +
 					fa(p.valid.length - C.quota.remaining) + ' آدرس آخر ارسال نخواهد شد.';
 			}
 
-			var labels = { update: 'شروع ارسال', 'delete': 'ارسال اعلام حذف', status: 'بررسی وضعیت' };
+			var labels = { update: 'شروع ارسال', 'delete': 'ارسال اعلام حذف', status: 'بررسی آخرین اعلان', inspect: 'بررسی وضعیت ایندکس', indexnow: 'ارسال به IndexNow' };
 			$('[data-label]', runBtn).textContent = labels[type] + (p.valid.length ? ' (' + fa(p.valid.length) + ')' : '');
 			runBtn.disabled = running || !p.valid.length;
 		};
@@ -315,6 +315,18 @@
 			var fail = 0;
 			var hardStop = '';
 
+			if (type === 'indexnow') {
+				progressLabel.textContent = 'ارسال یک‌جا به IndexNow…';
+				var dn = await post('indexnow_submit', { urls: list.join('\n') });
+				rows.forEach(function (li) { setResult(li, dn.ok ? 'ok' : 'fail', dn.ok ? 'به IndexNow ارسال شد' : dn.msg, dn.ok ? '' : dn.hint); });
+				progressBar.style.width = '100%';
+				progressSummary.textContent = dn.ok ? fa(dn.sent) + ' آدرس' : '';
+				progressLabel.textContent = 'تمام شد';
+				running = false; urlsBox.readOnly = false; stopBtn.hidden = true; refresh();
+				toast(dn.msg, dn.ok ? 'ok' : 'fail', dn.hint);
+				return;
+			}
+
 			for (var i = 0; i < list.length; i++) {
 				var li = rows[i];
 
@@ -331,14 +343,18 @@
 
 				if (d.ok) {
 					ok++;
-					var msg = type === 'status'
-						? 'آخرین به‌روزرسانی: ' + fmtTime(d.meta && d.meta.updated) + ' · آخرین حذف: ' + fmtTime(d.meta && d.meta.removed)
-						: (type === 'delete' ? 'حذف اعلام شد' : 'ارسال شد');
-					setResult(li, 'ok', msg);
+					if (type === 'inspect' && d.inspect) {
+						setResult(li, d.inspect.indexed ? 'ok' : 'skip', d.inspect.coverage, d.inspect.last_crawl ? 'آخرین خزش: ' + fmtTime(d.inspect.last_crawl) : 'هنوز خزش نشده');
+					} else {
+						var msg = type === 'status'
+							? 'آخرین به‌روزرسانی: ' + fmtTime(d.meta && d.meta.updated) + ' · آخرین حذف: ' + fmtTime(d.meta && d.meta.removed)
+							: (type === 'delete' ? 'حذف اعلام شد' : 'ارسال شد');
+						setResult(li, 'ok', msg);
+					}
 				} else {
 					fail++;
 					setResult(li, 'fail', d.msg + (d.code ? ' (HTTP ' + d.code + ')' : ''), d.hint);
-					if (d.code === 429 || /سهمیه|کلید|احراز/.test(d.msg || '')) {
+					if (type !== 'inspect' && (d.code === 429 || /سهمیه|کلید|احراز/.test(d.msg || ''))) {
 						hardStop = 'متوقف شد: ' + (d.code === 429 ? 'سهمیه گوگل پر شده' : d.msg);
 					}
 				}
@@ -465,6 +481,76 @@
 	}
 
 	/* ---------------------------------------------------------------- *
+	 * Settings: Search Console, IndexNow, reports
+	 * ---------------------------------------------------------------- */
+
+	var detectBtn = $('[data-sgia-detect]');
+	if (detectBtn) {
+		detectBtn.addEventListener('click', function () {
+			loading(detectBtn, true);
+			post('gsc_detect').then(function (d) {
+				loading(detectBtn, false);
+				if (d.ok) {
+					$('[data-sgia-prop]').textContent = d.property;
+					$('[data-sgia-prop-input]').value = d.property;
+				}
+				toast(d.msg, d.ok ? 'ok' : 'fail', d.hint);
+			});
+		});
+	}
+
+	var msgrBox = $('[data-sgia-msgr]');
+	if (msgrBox) {
+		var syncMsgr = function () {
+			var r = $('input[name="report_msgr"]:checked');
+			var v = r ? r.value : '';
+			msgrBox.hidden = !v;
+			$$('[data-sgia-msgr-help]', msgrBox).forEach(function (el) { el.hidden = el.getAttribute('data-sgia-msgr-help') !== v; });
+		};
+		$$('input[name="report_msgr"]').forEach(function (r) { r.addEventListener('change', syncMsgr); });
+		syncMsgr();
+	}
+
+	[['[data-sgia-report-test]', 'report_test'], ['[data-sgia-indexnow-test]', 'indexnow_test']].forEach(function (pair) {
+		var b = $(pair[0]);
+		if (!b) { return; }
+		b.addEventListener('click', function () {
+			loading(b, true);
+			post(pair[1]).then(function (d) {
+				loading(b, false);
+				toast(d.msg, d.ok ? 'ok' : 'fail', d.hint);
+			});
+		});
+	});
+
+	var bulkBox = $('[data-sgia-bulk]');
+	if (bulkBox) {
+		var bulkBtn = $('[data-sgia-indexnow-bulk]', bulkBox);
+		var bulkText = $('[data-sgia-bulk-status]', bulkBox);
+		var poll = function () {
+			post('indexnow_status').then(function (d) {
+				if (!d.state) { return; }
+				bulkText.textContent = d.state.text;
+				if (d.state.done) {
+					bulkBtn.disabled = false;
+					toast(d.state.text, d.state.error ? 'fail' : 'ok');
+				} else {
+					setTimeout(poll, 4000);
+				}
+			});
+		};
+		bulkBtn.addEventListener('click', function () {
+			if (!window.confirm('همه نوشته‌ها، برگه‌ها و محصولات منتشرشده به IndexNow ارسال شوند؟')) { return; }
+			bulkBtn.disabled = true;
+			post('indexnow_bulk').then(function (d) {
+				toast(d.msg, d.ok ? 'ok' : 'fail');
+				if (d.ok) { bulkText.textContent = d.state.text; setTimeout(poll, 3000); } else { bulkBtn.disabled = false; }
+			});
+		});
+		if (bulkBox.getAttribute('data-running') === '1') { setTimeout(poll, 1500); }
+	}
+
+	/* ---------------------------------------------------------------- *
 	 * Queue tab
 	 * ---------------------------------------------------------------- */
 
@@ -583,7 +669,8 @@
 			var q = (search.value || '').trim().toLowerCase();
 			var shown = 0;
 			$$('tbody tr[data-ok]', logTable).forEach(function (tr) {
-				var okMatch = filter === 'all' || tr.getAttribute('data-ok') === (filter === 'ok' ? '1' : '0');
+				var want = { ok: '1', fail: '0', skip: 'skip' }[filter];
+				var okMatch = filter === 'all' || tr.getAttribute('data-ok') === want;
 				var textMatch = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
 				tr.hidden = !(okMatch && textMatch);
 				if (!tr.hidden) { shown++; }
@@ -642,7 +729,14 @@
 						return;
 					}
 
-					if (type === 'status') {
+					if (type === 'status' && d.inspect) {
+						out.className = 'sgia-mb__out ' + (d.inspect.indexed ? 'is-ok' : 'is-warn');
+						out.textContent = (d.inspect.indexed ? '✓ ' : '• ') + d.inspect.coverage;
+						var lc = document.createElement('small');
+						lc.className = 'sgia-hint sgia-hint--plain';
+						lc.textContent = d.inspect.last_crawl ? 'آخرین خزش گوگل: ' + fmtTime(d.inspect.last_crawl) : 'هنوز توسط گوگل خزش نشده.';
+						out.appendChild(lc);
+					} else if (type === 'status') {
 						out.textContent = 'آخرین به‌روزرسانی: ' + fmtTime(d.meta && d.meta.updated) + ' — آخرین حذف: ' + fmtTime(d.meta && d.meta.removed);
 					} else {
 						out.textContent = '✓ درخواست ایندکس ارسال شد.';

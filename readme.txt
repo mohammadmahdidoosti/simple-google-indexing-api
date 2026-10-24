@@ -4,7 +4,7 @@ Tags: google, indexing api, seo, search console, index
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.1.0
+Stable tag: 2.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,10 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 == Description ==
 
 * ارسال خودکار URL_UPDATED هنگام انتشار/ویرایش و URL_DELETED هنگام حذف، لغو انتشار یا تغییر نامک
+* بررسی وضعیت ایندکس (URL Inspection API) پیش و پس از ارسال
+* بررسی پیش از ارسال (noindex، canonical، ۴۰۴، ریدایرکت) برای جلوگیری از هدر رفتن سهمیه
+* IndexNow برای Bing و Yandex
+* گزارش روزانه با ایمیل، بله یا تلگرام
 * صف ارسال: بارگذاری فایل اکسل/CSV (مثلاً خروجی «صفحات ایندکس‌نشده» Search Console) و ارسال خودکار روزانه تا سقف تعیین‌شده
 * داشبورد با مصرف سهمیه روزانه، نرخ موفقیت و فعالیت‌های اخیر
 * ارسال گروهی تا صدها آدرس با نوار پیشرفت، توقف و نتیجه جداگانه برای هر آدرس
@@ -36,6 +40,17 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 define( 'SGIA_KEY_FILE', '/path/outside/public_html/key.json' );
 
 == Changelog ==
+
+= 2.2.0 =
+* بررسی وضعیت واقعی ایندکس با URL Inspection API: پیش از ارسال (صفحه‌های ایندکس‌شده ارسال نمی‌شوند) و چند روز بعد از ارسال (نرخ ایندکس پس از ارسال)
+* بررسی پیش از ارسال: noindex و canonical در Rank Math / Yoast، و باز کردن خود صفحه برای ۴۰۴، ریدایرکت، meta robots و canonical
+* IndexNow (Bing، Yandex و ...): ارسال خودکار هنگام انتشار/ویرایش/حذف، ارسال فهرست‌های صف، ارسال همه صفحات در پس‌زمینه، فایل کلید خودکار
+* ووکامرس: اولویت محصولات تازه و پرفروش در صف، رد کردن محصولات ناموجود
+* گزارش روزانه با ایمیل، بله یا تلگرام، و هشدار فوری هنگام توقف ارسال
+* هشدار سلامت WP-Cron و دستور آماده Cron Job هاست
+* API یکپارچه‌سازی برای افزونه‌های دیگر (از شاخه gscii-integration): SGIA_Queue::import( $urls, $source )، SGIA_Queue::lookup( $urls )، SGIA_Queue::capacity_today()، اکشن sgia_published
+* داشبورد: کارت‌های ایندکس پس از ارسال، صف، سهمیه صرفه‌جویی‌شده و IndexNow
+* ارتقای خودکار جدول صف (نسخه ۳) از نسخه ۲.۱ و از شاخه gscii-integration
 
 = 2.1.0 =
 * تب جدید «صف ارسال»: بارگذاری xlsx / csv / txt یا چسباندن آدرس‌ها، خواندن همه شیت‌ها، حذف تکراری‌ها و آدرس‌های دامنه‌های دیگر

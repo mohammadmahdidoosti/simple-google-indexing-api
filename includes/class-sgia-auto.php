@@ -34,8 +34,23 @@ final class SGIA_Auto {
 		return SGIA_API::settings()['auto'] && SGIA_API::has_key();
 	}
 
+	/** Google: only the post types chosen in settings (quota is small). */
+	private static function google_for( $post ) {
+		return self::active() && self::is_enabled_post( $post );
+	}
+
+	/** IndexNow: every public post type (no tight quota). */
+	private static function indexnow_for( $post ) {
+		return $post instanceof WP_Post
+			&& SGIA_IndexNow::enabled() && SGIA_API::settings()['indexnow_auto']
+			&& is_post_type_viewable( $post->post_type ) && 'attachment' !== $post->post_type
+			&& ! wp_is_post_revision( $post ) && ! wp_is_post_autosave( $post );
+	}
+
 	public static function on_status_change( $new_status, $old_status, $post ) {
-		if ( ! self::active() || ! self::is_enabled_post( $post ) ) {
+		$google = self::google_for( $post );
+		$inow   = self::indexnow_for( $post );
+		if ( ! $google && ! $inow ) {
 			return;
 		}
 
@@ -44,19 +59,31 @@ final class SGIA_Auto {
 			if ( ! $url ) {
 				return;
 			}
-			$prev = get_post_meta( $post->ID, SGIA_API::META_URL, true );
-			if ( $prev && $prev !== $url ) {
-				self::queue( $prev, 'URL_DELETED', $post->ID ); // slug changed
-			}
+			$prev  = get_post_meta( $post->ID, SGIA_API::META_URL, true );
+			$moved = $prev && $prev !== $url; // slug changed
 			update_post_meta( $post->ID, SGIA_API::META_URL, $url );
-			self::queue( $url, 'URL_UPDATED', $post->ID );
+
+			if ( $google ) {
+				if ( $moved ) {
+					self::queue( $prev, 'URL_DELETED', $post->ID );
+				}
+				self::queue( $url, 'URL_UPDATED', $post->ID );
+			}
+			if ( $inow ) {
+				SGIA_IndexNow::buffer_add( $moved ? [ $prev, $url ] : [ $url ] );
+			}
 			return;
 		}
 
 		if ( 'publish' === $old_status ) {
 			$url = get_post_meta( $post->ID, SGIA_API::META_URL, true );
 			if ( $url ) {
-				self::queue( $url, 'URL_DELETED', $post->ID );
+				if ( $google ) {
+					self::queue( $url, 'URL_DELETED', $post->ID );
+				}
+				if ( $inow ) {
+					SGIA_IndexNow::buffer_add( [ $url ] );
+				}
 			}
 		}
 	}
@@ -64,7 +91,7 @@ final class SGIA_Auto {
 	/** Remember the real permalink before WordPress adds the __trashed suffix. */
 	public static function on_before_trash( $post_id ) {
 		$post = get_post( $post_id );
-		if ( self::is_enabled_post( $post ) && 'publish' === $post->post_status
+		if ( ( self::is_enabled_post( $post ) || self::indexnow_for( $post ) ) && 'publish' === $post->post_status
 			&& ! get_post_meta( $post_id, SGIA_API::META_URL, true ) ) {
 			update_post_meta( $post_id, SGIA_API::META_URL, get_permalink( $post ) );
 		}
@@ -73,15 +100,23 @@ final class SGIA_Auto {
 	/** Permanent delete of a still-published post fires no status transition. */
 	public static function on_before_delete( $post_id ) {
 		$post = get_post( $post_id );
-		if ( ! self::active() || ! self::is_enabled_post( $post ) || 'publish' !== $post->post_status ) {
+		if ( ! $post || 'publish' !== $post->post_status ) {
+			return;
+		}
+		$google = self::google_for( $post );
+		$inow   = self::indexnow_for( $post );
+		if ( ! $google && ! $inow ) {
 			return;
 		}
 		$url = get_post_meta( $post_id, SGIA_API::META_URL, true );
 		if ( ! $url ) {
 			$url = get_permalink( $post );
 		}
-		if ( $url ) {
+		if ( $url && $google ) {
 			self::queue( $url, 'URL_DELETED', 0 );
+		}
+		if ( $url && $inow ) {
+			SGIA_IndexNow::buffer_add( [ $url ] );
 		}
 	}
 
@@ -95,6 +130,14 @@ final class SGIA_Auto {
 	public static function cron_send( $url, $type, $post_id = 0 ) {
 		if ( $post_id && ! get_post( $post_id ) ) {
 			$post_id = 0;
+		}
+		if ( 'URL_UPDATED' === $type ) {
+			$chk = SGIA_Check::run( $url, $post_id );
+			if ( ! $chk['ok'] ) {
+				SGIA_Stats::bump( 'skipped' );
+				SGIA_API::log_entry( [ 'url' => $url, 'type' => 'SKIP', 'source' => 'auto', 'code' => (int) $chk['code'], 'msg' => $chk['reason'] ] );
+				return;
+			}
 		}
 		SGIA_API::publish( $url, $type, 'auto', $post_id );
 	}

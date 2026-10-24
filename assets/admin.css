@@ -1081,3 +1081,105 @@
 }
 .sgia-pages__info { color: var(--sgia-muted); font-size: 12.5px; }
 .sgia-pages__links { display: flex; gap: 8px; }
+
+/* ---------- v2.2: settings sections, inspection, IndexNow, reports ---------- */
+
+.sgia-switch-row + .sgia-switch-row,
+.sgia-switch-row + .sgia-sub,
+.sgia-sub + .sgia-switch-row,
+.sgia-kv + .sgia-sub,
+.sgia-alert + .sgia-switch-row,
+.sgia-inline-actions + .sgia-switch-row,
+.sgia-help + .sgia-switch-row,
+.sgia-field-group + .sgia-switch-row,
+.sgia-msgr + .sgia-switch-row { margin-block-start: 10px; }
+
+.sgia-sub {
+	margin-block-start: 10px;
+	padding-inline-start: 16px;
+	border-inline-start: 2px solid var(--sgia-border);
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.sgia-sub .sgia-switch-row { background: transparent; border: 1px solid var(--sgia-border); }
+
+.sgia-field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 18px; }
+.sgia-field-group--tight { margin-block-start: 0; }
+
+.sgia-input {
+	inline-size: 100%;
+	min-block-size: 38px;
+	padding: 6px 12px;
+	border: 1px solid var(--sgia-border) !important;
+	border-radius: var(--sgia-radius-sm) !important;
+	font-size: 13px;
+	text-align: left;
+}
+.sgia-input:focus { border-color: var(--sgia-accent) !important; box-shadow: 0 0 0 3px rgba(47, 91, 234, .15) !important; }
+[data-sgia-msgr-help="telegram"] .sgia-input { margin-block-start: 8px; }
+.sgia-msgr { margin-block-start: 12px; }
+
+.sgia-help--warn { color: var(--sgia-warn); }
+.sgia-help--inline { margin: 0; align-self: center; }
+
+.sgia-kv--top { margin: 0 0 12px; }
+.sgia-kv div.is-warn dt, .sgia-kv div.is-warn dd { color: var(--sgia-warn); }
+.sgia-kv div.is-warn { flex-direction: column; gap: 2px; }
+.sgia-kv dd code { font-size: 11.5px; }
+
+.sgia-inline-actions--start { justify-content: flex-start; margin-block: 0 14px; gap: 8px; }
+.sgia-card > .sgia-inline-actions--start:last-child { margin-block: 16px 0; }
+
+.sgia-segment--radio { margin: 0; }
+.sgia-segment--radio span { padding: 6px 14px; font-size: 12.5px; }
+
+.sgia-alert--tight { margin: 0 0 12px; }
+
+.sgia-bulk {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-block-start: 14px;
+	padding: 14px 16px;
+	border-radius: 12px;
+	background: var(--sgia-accent-soft);
+}
+.sgia-bulk__text { display: flex; flex-direction: column; gap: 3px; min-inline-size: 0; }
+.sgia-bulk__text span { color: var(--sgia-muted); font-size: 12.5px; }
+
+.sgia-copy-chip--block { inline-size: 100%; align-self: stretch; justify-content: flex-start; margin-block-start: 6px; }
+.sgia-copy-chip--block span { white-space: normal; word-break: break-all; text-align: left; }
+.sgia-alert .sgia-copy-chip--block { background: rgba(255, 255, 255, .7); }
+
+.sgia-badge--xs { font-size: 10.5px; padding: 1px 7px; vertical-align: middle; }
+.sgia-table__url .sgia-badge--xs { font-family: var(--sgia-font); margin-inline-start: 6px; }
+.sgia-table__idx { white-space: nowrap; }
+.sgia-table__idx small { display: block; margin-block-start: 4px; font-size: 11px; }
+
+.sgia-dot.is-skip { background: var(--sgia-warn); box-shadow: 0 0 0 3px var(--sgia-warn-soft); }
+.sgia-activity__meta em.is-skip { color: var(--sgia-warn); }
+
+.sgia-mb__out.is-warn { color: var(--sgia-warn); }
+.sgia-hint--plain::before { content: ""; }
+
+.sgia-stat__sub br + * { display: inline; }
+
+/* Sticky save bar: solid, and never let a control end up underneath it. */
+.sgia-settings .sgia-savebar {
+	background: #f0f0f1;
+	border-block-start: 1px solid var(--sgia-border);
+	margin-inline: -4px;
+	padding-inline: 4px;
+	box-shadow: 0 -8px 16px -12px rgba(20, 26, 43, .25);
+}
+.sgia-settings .sgia-card :is(button, input, select, textarea, a, label) { scroll-margin-block-end: 96px; }
+
+.sgia-stats--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .sgia-stats--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .sgia-stats--4 { grid-template-columns: minmax(0, 1fr); } }
+.sgia-activity__url--text { direction: rtl; text-align: start; }
+.sgia-table__msg.is-skip > span { color: var(--sgia-warn); }
+.sgia-help code { font-size: 11px; }

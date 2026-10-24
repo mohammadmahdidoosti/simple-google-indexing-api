@@ -15,10 +15,10 @@ final class SGIA_API {
 	const OPT_QUOTA    = 'sgia_quota';
 	const OPT_STATS    = 'sgia_stats';
 	const OPT_VERIFIED = 'sgia_verified_at';
-	const TOKEN_CACHE  = 'sgia_access_token';
+	const TOKEN_CACHE  = 'sgia_access_token_v2'; // v2: token also carries the Search Console scope
 	const META_URL     = '_sgia_submitted_url';
 	const META_LAST    = '_sgia_last';
-	const SCOPE        = 'https://www.googleapis.com/auth/indexing';
+	const SCOPE        = 'https://www.googleapis.com/auth/indexing https://www.googleapis.com/auth/webmasters.readonly';
 	const TOKEN_URL    = 'https://oauth2.googleapis.com/token';
 	const PUBLISH_URL  = 'https://indexing.googleapis.com/v3/urlNotifications:publish';
 	const METADATA_URL = 'https://indexing.googleapis.com/v3/urlNotifications/metadata';
@@ -30,9 +30,33 @@ final class SGIA_API {
 
 	public static function defaults() {
 		return [
-			'auto'        => 1,
-			'types'       => [ 'post', 'page' ],
-			'daily_limit' => 200,
+			'auto'            => 1,
+			'types'           => [ 'post', 'page' ],
+			'daily_limit'     => 200,
+			// Search Console (URL Inspection)
+			'gsc_property'    => '',
+			'inspect_before'  => 1,
+			'recheck_days'    => 3,
+			'inspect_limit'   => 1500,
+			// Pre-send checks
+			'precheck'        => 1,
+			'precheck_http'   => 1,
+			// IndexNow
+			'indexnow'        => 0,
+			'indexnow_auto'   => 1,
+			'indexnow_queue'  => 1,
+			'indexnow_key'    => '',
+			// WooCommerce
+			'woo_priority'    => 1,
+			'woo_skip_oos'    => 1,
+			// Reports
+			'report_email'    => 0,
+			'report_email_to' => '',
+			'report_msgr'     => '',
+			'report_token'    => '',
+			'report_chat'     => '',
+			'report_api_base' => '',
+			'report_alerts'   => 1,
 		];
 	}
 
@@ -42,7 +66,12 @@ final class SGIA_API {
 
 		$s['types']       = is_array( $s['types'] ) ? array_values( $s['types'] ) : [];
 		$s['daily_limit'] = max( 1, (int) $s['daily_limit'] );
-		$s['auto']        = empty( $s['auto'] ) ? 0 : 1;
+		foreach ( [ 'auto', 'inspect_before', 'precheck', 'precheck_http', 'indexnow', 'indexnow_auto', 'indexnow_queue', 'woo_priority', 'woo_skip_oos', 'report_email', 'report_alerts' ] as $b ) {
+			$s[ $b ] = empty( $s[ $b ] ) ? 0 : 1;
+		}
+		$s['recheck_days']  = max( 0, min( 30, (int) $s['recheck_days'] ) );
+		$s['inspect_limit'] = max( 0, min( 2000, (int) $s['inspect_limit'] ) );
+		$s['report_msgr']   = in_array( $s['report_msgr'], [ 'telegram', 'bale' ], true ) ? $s['report_msgr'] : '';
 		return $s;
 	}
 
@@ -188,7 +217,8 @@ final class SGIA_API {
 	 * HTTP
 	 * ------------------------------------------------------------------ */
 
-	private static function api( $method, $endpoint, $body = null ) {
+	/** Authenticated call to any Google API this token's scopes cover. */
+	public static function request( $method, $endpoint, $body = null ) {
 		for ( $attempt = 0; $attempt < 2; $attempt++ ) {
 			$token = self::access_token( $attempt > 0 );
 			if ( is_wp_error( $token ) ) {
@@ -278,7 +308,7 @@ final class SGIA_API {
 		} elseif ( self::quota()['remaining'] <= 0 ) {
 			$res = new WP_Error( 'sgia_quota', 'سهمیه روزانه تعیین‌شده در تنظیمات تمام شده است.' );
 		} else {
-			$res = self::api( 'POST', self::PUBLISH_URL, [ 'url' => $url, 'type' => $type ] );
+			$res = self::request( 'POST', self::PUBLISH_URL, [ 'url' => $url, 'type' => $type ] );
 			if ( ! is_wp_error( $res ) ) {
 				self::bump_quota();
 			}
@@ -293,7 +323,7 @@ final class SGIA_API {
 		if ( ! self::valid_url( $url ) ) {
 			return new WP_Error( 'sgia_bad_url', 'آدرس نامعتبر است.' );
 		}
-		return self::api( 'GET', self::METADATA_URL . '?url=' . rawurlencode( $url ) );
+		return self::request( 'GET', self::METADATA_URL . '?url=' . rawurlencode( $url ) );
 	}
 
 	public static function is_ok( $res ) {
@@ -364,8 +394,11 @@ final class SGIA_API {
 	 * Quota (resets at midnight America/Los_Angeles, like Google's)
 	 * ------------------------------------------------------------------ */
 
-	public static function pacific_day() {
+	public static function pacific_day( $offset_days = 0 ) {
 		$dt = new DateTime( 'now', new DateTimeZone( 'America/Los_Angeles' ) );
+		if ( $offset_days ) {
+			$dt->modify( sprintf( '%+d day', $offset_days ) );
+		}
 		return $dt->format( 'Y-m-d' );
 	}
 
@@ -420,10 +453,34 @@ final class SGIA_API {
 		$stats[ $ok ? 'ok' : 'fail' ]++;
 		$stats['last'] = $entry['time'];
 		update_option( self::OPT_STATS, $stats, false );
+		SGIA_Stats::bump( $ok ? 'g_ok' : 'g_fail' );
 
 		if ( $post_id ) {
 			update_post_meta( $post_id, self::META_LAST, $entry );
 		}
+
+		/**
+		 * Fires after every Indexing API publish attempt (manual, bulk, auto, post or queue).
+		 *
+		 * @param string $url     Submitted URL.
+		 * @param string $type    URL_UPDATED | URL_DELETED.
+		 * @param bool   $ok      Whether Google accepted it.
+		 * @param int    $code    HTTP status (0 for local errors).
+		 * @param string $source  auto | manual | bulk | post | queue.
+		 * @param int    $post_id Related post ID or 0.
+		 */
+		do_action( 'sgia_published', $url, $type, $ok, $entry['code'], $source, (int) $post_id );
+	}
+
+	/**
+	 * Non-Google log line: a URL skipped before sending, or an IndexNow batch.
+	 * Not counted in the Google success/failure totals.
+	 */
+	public static function log_entry( array $e ) {
+		$e = wp_parse_args( $e, [ 'time' => time(), 'url' => '', 'type' => 'SKIP', 'source' => '', 'code' => 0, 'ok' => false, 'msg' => '', 'hint' => '' ] );
+		$log = self::get_log();
+		array_unshift( $log, $e );
+		update_option( self::OPT_LOG, array_slice( $log, 0, self::LOG_MAX ), false );
 	}
 
 	public static function get_log() {
@@ -448,6 +505,9 @@ final class SGIA_API {
 		foreach ( self::get_log() as $row ) {
 			if ( $row['time'] < $since ) {
 				break;
+			}
+			if ( ! in_array( $row['type'], [ 'URL_UPDATED', 'URL_DELETED' ], true ) ) {
+				continue;
 			}
 			$total++;
 			if ( ! empty( $row['ok'] ) ) {
