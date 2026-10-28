@@ -3,7 +3,7 @@
  * Plugin Name:       Simple Google Indexing API
  * Plugin URI:        https://developers.google.com/search/apis/indexing-api/v3/quickstart
  * Description:       ارسال خودکار و دستی درخواست ایندکس (URL_UPDATED / URL_DELETED) به Google Indexing API با داشبورد، ارسال گروهی، کنترل سهمیه و گزارش کامل.
- * Version:           2.3.1
+ * Version:           2.3.2
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Moh
@@ -36,7 +36,7 @@ if ( defined( 'SGIA_VERSION' ) ) {
 	return;
 }
 
-define( 'SGIA_VERSION', '2.3.1' );
+define( 'SGIA_VERSION', '2.3.2' );
 define( 'SGIA_FILE', __FILE__ );
 define( 'SGIA_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SGIA_URL', plugin_dir_url( __FILE__ ) );

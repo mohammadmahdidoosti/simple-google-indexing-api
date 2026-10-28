@@ -4,7 +4,7 @@ Tags: google, indexing api, seo, search console, index
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.3.1
+Stable tag: 2.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -40,6 +40,10 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 define( 'SGIA_KEY_FILE', '/path/outside/public_html/key.json' );
 
 == Changelog ==
+
+= 2.3.2 =
+* رفع خطای مهلک صف روی هاست‌هایی که توابع curl_multi را غیرفعال کرده‌اند (مثل سایت زنده): در این حالت درخواست‌ها یکی‌یکی و تا جایی که وقت اجرا برسد ارسال می‌شوند
+* اگر اجرای صف وسط کار قطع شود، قفل اجرا فوراً آزاد می‌شود و صف ۵ دقیقه معطل نمی‌ماند
 
 = 2.3.1 =
 * اگر دو نسخه از افزونه هم‌زمان فعال باشند (مثلاً پوشه قدیمی تغییرنام‌داده اما فعال)، دیگر خطای مهلک رخ نمی‌دهد؛ پیام می‌دهد یکی را غیرفعال کنید

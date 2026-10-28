@@ -649,7 +649,7 @@ final class SGIA_Admin {
 						<?php if ( $lr ) : ?>
 							<div><dt>نتیجه آخرین اجرا</dt><dd><?php echo esc_html( self::fa( $lr['sent'] ) . ' ارسال' . ( $lr['skipped'] ? '، ' . self::fa( $lr['skipped'] ) . ' رد' : '' ) . ( $lr['rechecked'] ? '، ' . self::fa( $lr['rechecked'] ) . ' بررسی' : '' ) . ' در ' . self::fa( $lr['secs'] ) . ' ثانیه' ); ?></dd></div>
 						<?php endif; ?>
-						<div><dt>هر اجرا</dt><dd>حداکثر <?php echo esc_html( self::fa( SGIA_Queue::BATCH ) ); ?> آدرس</dd></div>
+						<div><dt>هر اجرا</dt><dd>حداکثر <?php echo esc_html( self::fa( SGIA_Queue::BATCH ) ); ?> آدرس<?php echo SGIA_Http::parallel() ? '' : ' (یکی‌یکی، تا جایی که وقت اجرا برسد)'; ?></dd></div>
 						<div><dt>بررسی پیش از ارسال</dt><dd><?php echo $g['precheck'] ? ( $g['precheck_http'] ? 'کامل' : 'فقط داخلی' ) : 'خاموش'; ?></dd></div>
 						<div><dt>بررسی ایندکس</dt><dd><?php echo esc_html( ( $g['inspect_before'] ? 'پیش از ارسال' : '' ) . ( $g['inspect_before'] && $g['recheck_days'] ? ' + ' : '' ) . ( $g['recheck_days'] ? self::fa( $g['recheck_days'] ) . ' روز بعد' : '' ) ?: 'خاموش' ); ?></dd></div>
 					</dl>

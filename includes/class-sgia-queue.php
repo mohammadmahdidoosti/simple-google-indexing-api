@@ -451,6 +451,14 @@ final class SGIA_Queue {
 			$res['msg'] = 'یک ارسال دیگر در حال اجراست؛ کمی بعد دوباره تلاش کنید.';
 			return $res;
 		}
+		// If PHP dies mid-run (fatal error, host time limit), free the lock right away
+		// instead of blocking the queue for 5 minutes.
+		$locked = true;
+		register_shutdown_function( function () use ( &$locked ) {
+			if ( $locked ) {
+				delete_option( self::LOCK );
+			}
+		} );
 		if ( $manual ) {
 			delete_option( self::OPT_HALT );
 		}
@@ -477,109 +485,123 @@ final class SGIA_Queue {
 		} else {
 			$allowed = min( $allowed, self::BATCH );
 			$rows    = $wpdb->get_results( $wpdb->prepare( "SELECT id, url, attempts, post_id FROM {$t} WHERE status = 'pending' AND enriched = 1 ORDER BY priority DESC, id ASC LIMIT %d", $allowed ) ); // phpcs:ignore
-			$cand    = [];
-			foreach ( (array) $rows as $r ) {
-				$cand[ (int) $r->id ] = $r;
-			}
 
-			// 1. Pre-check, in parallel: don't spend quota on pages Google won't index.
-			if ( $cand ) {
-				$in = [];
-				foreach ( $cand as $id => $r ) {
-					$in[ $id ] = [ $r->url, (int) $r->post_id ];
+			// Parallel hosts handle the whole batch at once. Without curl_multi every request
+			// waits for the previous one, so go one URL at a time and stop when time runs short.
+			$parallel = SGIA_Http::parallel();
+			foreach ( array_chunk( (array) $rows, $parallel ? self::BATCH : 1 ) as $part ) {
+				if ( $stop || $left() < ( $parallel ? 8 : 15 ) ) {
+					break;
 				}
-				foreach ( SGIA_Check::run_many( $in ) as $id => $chk ) {
-					if ( ! $chk['ok'] ) {
-						self::skip( $cand[ $id ], $chk['reason'], $chk['code'] );
-						unset( $cand[ $id ] );
-						$res['skipped']++;
-					}
+				$cand = [];
+				foreach ( $part as $r ) {
+					$cand[ (int) $r->id ] = $r;
 				}
-			}
 
-			// 2. Already indexed? Skip it and keep the Indexing API quota.
-			if ( $cand && $g['inspect_before'] && SGIA_Inspect::available() && $left() > 8 ) {
-				$urls = [];
-				foreach ( $cand as $id => $r ) {
-					$urls[ $id ] = $r->url;
-				}
-				$now = current_time( 'mysql', true );
-				foreach ( SGIA_Inspect::inspect_many( $urls ) as $id => $ins ) {
-					if ( is_wp_error( $ins ) ) {
-						continue; // inspection trouble never blocks sending
+				// 1. Pre-check, in parallel: don't spend quota on pages Google won't index.
+				if ( $cand ) {
+					$in = [];
+					foreach ( $cand as $id => $r ) {
+						$in[ $id ] = [ $r->url, (int) $r->post_id ];
 					}
-					$wpdb->update( $t, [ 'index_state' => $ins['state'], 'coverage' => $ins['coverage_fa'], 'checked_at' => $now ], [ 'id' => $id ] );
-					if ( $ins['indexed'] ) {
-						self::skip( $cand[ $id ], 'از قبل ایندکس شده', 0 );
-						unset( $cand[ $id ] );
-						$res['skipped']++;
+					foreach ( SGIA_Check::run_many( $in ) as $id => $chk ) {
+						if ( ! $chk['ok'] ) {
+							self::skip( $cand[ $id ], $chk['reason'], $chk['code'] );
+							unset( $cand[ $id ] );
+							$res['skipped']++;
+						}
 					}
 				}
-			}
 
-			// 3. Send, in parallel. Rows left over when time runs short stay pending.
-			if ( $cand && $left() > 5 ) {
-				$items = [];
-				foreach ( $cand as $id => $r ) {
-					$items[ $id ] = [ 'url' => $r->url, 'type' => 'URL_UPDATED', 'post_id' => (int) $r->post_id ];
+				// 2. Already indexed? Skip it and keep the Indexing API quota.
+				if ( $cand && $g['inspect_before'] && SGIA_Inspect::available() && $left() > 8 ) {
+					$urls = [];
+					foreach ( $cand as $id => $r ) {
+						$urls[ $id ] = $r->url;
+					}
+					$now = current_time( 'mysql', true );
+					foreach ( SGIA_Inspect::inspect_many( $urls ) as $id => $ins ) {
+						if ( is_wp_error( $ins ) ) {
+							continue; // inspection trouble never blocks sending
+						}
+						$wpdb->update( $t, [ 'index_state' => $ins['state'], 'coverage' => $ins['coverage_fa'], 'checked_at' => $now ], [ 'id' => $id ] );
+						if ( $ins['indexed'] ) {
+							self::skip( $cand[ $id ], 'از قبل ایندکس شده', 0 );
+							unset( $cand[ $id ] );
+							$res['skipped']++;
+						}
+					}
 				}
-				$now = current_time( 'mysql', true );
-				foreach ( SGIA_API::publish_many( $items, 'queue' ) as $id => $r ) {
-					$row  = $cand[ $id ];
-					$code = is_wp_error( $r ) ? 0 : (int) $r['code'];
-					$err  = is_wp_error( $r ) ? $r->get_error_code() : '';
 
-					if ( SGIA_API::is_ok( $r ) ) {
-						$wpdb->update( $t, [
-							'status'     => 'sent',
-							'sent_at'    => $now,
-							'attempts'   => $row->attempts + 1,
-							'last_code'  => $code,
-							'last_error' => '',
-							'recheck_at' => $g['recheck_days'] ? gmdate( 'Y-m-d H:i:s', time() + $g['recheck_days'] * DAY_IN_SECONDS ) : null,
-							'checks'     => 0,
-						], [ 'id' => $id ] );
-						self::bump_today();
-						SGIA_Stats::bump( 'q_sent' );
-						self::remember_permalink( (int) $row->post_id );
-						$res['sent']++;
-						continue;
+				// 3. Send, in parallel. Rows left over when time runs short stay pending.
+				if ( $cand && $left() > 5 ) {
+					$items = [];
+					foreach ( $cand as $id => $r ) {
+						$items[ $id ] = [ 'url' => $r->url, 'type' => 'URL_UPDATED', 'post_id' => (int) $r->post_id ];
 					}
+					$now = current_time( 'mysql', true );
+					foreach ( SGIA_API::publish_many( $items, 'queue' ) as $id => $r ) {
+						$row  = $cand[ $id ];
+						$code = is_wp_error( $r ) ? 0 : (int) $r['code'];
+						$err  = is_wp_error( $r ) ? $r->get_error_code() : '';
 
-					$msg = mb_substr( SGIA_API::error_text( $r ), 0, 250 );
+						if ( SGIA_API::is_ok( $r ) ) {
+							$wpdb->update( $t, [
+								'status'     => 'sent',
+								'sent_at'    => $now,
+								'attempts'   => $row->attempts + 1,
+								'last_code'  => $code,
+								'last_error' => '',
+								'recheck_at' => $g['recheck_days'] ? gmdate( 'Y-m-d H:i:s', time() + $g['recheck_days'] * DAY_IN_SECONDS ) : null,
+								'checks'     => 0,
+							], [ 'id' => $id ] );
+							self::bump_today();
+							SGIA_Stats::bump( 'q_sent' );
+							self::remember_permalink( (int) $row->post_id );
+							$res['sent']++;
+							continue;
+						}
 
-					// Account-wide problems: stop for today, keep the row pending (no attempt counted).
-					$why = '';
-					if ( 'sgia_quota' === $err ) {
-						$why   = 'سقف روزانه تعیین‌شده در تنظیمات پر شده است.';
-						$local = true;
-					} elseif ( 429 === $code ) {
-						$why = 'سهمیه گوگل پر شده است.';
-					} elseif ( in_array( $code, [ 401, 403 ], true ) || in_array( $err, [ 'sgia_no_key', 'sgia_token', 'sgia_key', 'sgia_sign', 'sgia_openssl', 'sgia_auth' ], true ) ) {
-						$hint = SGIA_API::hint( $r );
-						$why  = $msg . ( $hint ? ' — ' . $hint : '' );
+						$msg = mb_substr( SGIA_API::error_text( $r ), 0, 250 );
+
+						// Account-wide problems: stop for today, keep the row pending (no attempt counted).
+						$why = '';
+						if ( 'sgia_quota' === $err ) {
+							$why   = 'سقف روزانه تعیین‌شده در تنظیمات پر شده است.';
+							$local = true;
+						} elseif ( 429 === $code ) {
+							$why = 'سهمیه گوگل پر شده است.';
+						} elseif ( in_array( $code, [ 401, 403 ], true ) || in_array( $err, [ 'sgia_no_key', 'sgia_token', 'sgia_key', 'sgia_sign', 'sgia_openssl', 'sgia_auth' ], true ) ) {
+							$hint = SGIA_API::hint( $r );
+							$why  = $msg . ( $hint ? ' — ' . $hint : '' );
+						}
+						if ( $why ) {
+							$stop = $stop ? $stop : $why;
+							$wpdb->update( $t, [ 'last_code' => $code, 'last_error' => $msg ], [ 'id' => $id ] );
+							continue;
+						}
+
+						// URL-specific rejection: no point retrying. Network/5xx: retry a few times.
+						$attempts = $row->attempts + 1;
+						$final    = ( $code >= 400 && $code < 500 ) || $attempts >= self::MAX_ATTEMPTS;
+						$wpdb->update( $t, [ 'status' => $final ? 'failed' : 'pending', 'attempts' => $attempts, 'last_code' => $code, 'last_error' => $msg ], [ 'id' => $id ] );
+						$res['failed']++;
 					}
-					if ( $why ) {
-						$stop = $stop ? $stop : $why;
-						$wpdb->update( $t, [ 'last_code' => $code, 'last_error' => $msg ], [ 'id' => $id ] );
-						continue;
-					}
-
-					// URL-specific rejection: no point retrying. Network/5xx: retry a few times.
-					$attempts = $row->attempts + 1;
-					$final    = ( $code >= 400 && $code < 500 ) || $attempts >= self::MAX_ATTEMPTS;
-					$wpdb->update( $t, [ 'status' => $final ? 'failed' : 'pending', 'attempts' => $attempts, 'last_code' => $code, 'last_error' => $msg ], [ 'id' => $id ] );
-					$res['failed']++;
 				}
 			}
 		}
 
 		// 4. Did URLs sent a few days ago get indexed? Runs every time, in parallel.
 		if ( $g['recheck_days'] && $left() > 5 ) {
-			$res['rechecked'] = self::recheck( self::RECHECK );
+			// One-by-one hosts: only as many as fit in the remaining time (~5s each).
+			$n = SGIA_Http::parallel() ? self::RECHECK : min( self::RECHECK, (int) floor( ( $left() - 5 ) / 5 ) );
+			if ( $n > 0 ) {
+				$res['rechecked'] = self::recheck( $n );
+			}
 		}
 
 		delete_option( self::LOCK );
+		$locked = false;
 
 		if ( $stop ) {
 			self::halt( $stop );

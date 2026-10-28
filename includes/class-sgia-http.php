@@ -20,19 +20,52 @@ final class SGIA_Http {
 	 * @param int $concurrency Max requests in flight at once.
 	 * @return array<string|int,array|WP_Error> Same keys as $reqs.
 	 */
+	/**
+	 * Can this server really send requests in parallel? Many shared hosts put
+	 * curl_multi_exec / curl_multi_init in disable_functions; calling them is a
+	 * fatal error, so check first and fall back to one-by-one requests.
+	 */
+	public static function parallel() {
+		static $ok = null;
+		if ( null === $ok ) {
+			$ok = (bool) apply_filters( 'sgia_parallel_http', self::requests_class() && class_exists( 'WP_HTTP_Requests_Response' ) && class_exists( 'WP_HTTP_Requests_Hooks' ) && self::curl_multi_ok() );
+		}
+		return $ok;
+	}
+
+	private static function curl_multi_ok() {
+		$disabled = array_map( 'trim', explode( ',', strtolower( (string) ini_get( 'disable_functions' ) ) ) );
+		foreach ( [ 'curl_init', 'curl_exec', 'curl_multi_init', 'curl_multi_exec', 'curl_multi_select', 'curl_multi_add_handle', 'curl_multi_remove_handle', 'curl_multi_info_read', 'curl_multi_getcontent', 'curl_multi_close' ] as $f ) {
+			if ( ! function_exists( $f ) || in_array( $f, $disabled, true ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static function requests_class() {
+		$c = class_exists( '\WpOrg\Requests\Requests' ) ? '\WpOrg\Requests\Requests' : ( class_exists( 'Requests' ) ? 'Requests' : '' );
+		return ( $c && method_exists( $c, 'request_multiple' ) ) ? $c : '';
+	}
+
+	private static function sequential( array $reqs ) {
+		$out = [];
+		foreach ( $reqs as $k => $r ) {
+			$out[ $k ] = wp_remote_request( $r['url'], self::wp_args( $r ) );
+		}
+		return $out;
+	}
+
 	public static function multi( array $reqs, $concurrency = 8 ) {
 		$out = [];
 		if ( ! $reqs ) {
 			return $out;
 		}
 
-		$requests_class = class_exists( '\WpOrg\Requests\Requests' ) ? '\WpOrg\Requests\Requests' : ( class_exists( 'Requests' ) ? 'Requests' : '' );
-		if ( ! $requests_class || ! method_exists( $requests_class, 'request_multiple' ) || ! class_exists( 'WP_HTTP_Requests_Response' ) ) {
-			foreach ( $reqs as $k => $r ) {
-				$out[ $k ] = wp_remote_request( $r['url'], self::wp_args( $r ) );
-			}
-			return $out;
+		if ( ! self::parallel() ) {
+			return self::sequential( $reqs );
 		}
+		$requests_class = self::requests_class();
 
 		$pending = [];
 		foreach ( $reqs as $k => $r ) {
@@ -52,12 +85,24 @@ final class SGIA_Http {
 			}
 
 			mbstring_binary_safe_encoding();
+			$crashed = false;
 			try {
 				$responses = call_user_func( [ $requests_class, 'request_multiple' ], $batch );
 			} catch ( \Exception $e ) {
 				$responses = array_fill_keys( array_keys( $batch ), $e );
+			} catch ( \Throwable $e ) { // e.g. a curl_multi function missing at runtime
+				$crashed = true;
 			}
 			reset_mbstring_encoding();
+
+			if ( $crashed ) {
+				$sub = [];
+				foreach ( $chunk as $k => $unused ) {
+					$sub[ $k ] = $reqs[ $k ];
+				}
+				$out = $sub ? self::sequential( $sub ) + $out : $out;
+				continue;
+			}
 
 			foreach ( $batch as $k => $unused ) {
 				$resp = isset( $responses[ $k ] ) ? $responses[ $k ] : null;
