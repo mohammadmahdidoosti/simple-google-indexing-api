@@ -15,6 +15,7 @@ final class SGIA_Inspect {
 	const OPT_DAY    = 'sgia_inspect_day';
 	const OPT_HALT   = 'sgia_inspect_halt';
 	const PROP_CACHE = 'sgia_gsc_property';
+	const PROP_FAIL  = 'sgia_gsc_property_fail';
 
 	/* ------------------------------------------------------------------ *
 	 * Property
@@ -59,14 +60,31 @@ final class SGIA_Inspect {
 		return new WP_Error( 'sgia_no_property', 'سرویس اکانت به property این سایت در Search Console دسترسی ندارد.', 'ایمیل سرویس اکانت را در Search Console به property سایت ' . $bare . ' اضافه کنید.' );
 	}
 
-	/** @return string|WP_Error */
+	/**
+	 * A failed detection is remembered for an hour, so a missing permission
+	 * doesn't cost an extra Google call (and seconds) for every queued URL.
+	 *
+	 * @return string|WP_Error
+	 */
 	public static function property() {
 		$s = SGIA_API::settings();
 		if ( $s['gsc_property'] ) {
 			return $s['gsc_property'];
 		}
 		$cached = get_transient( self::PROP_CACHE );
-		return $cached ? $cached : self::detect();
+		if ( $cached ) {
+			return $cached;
+		}
+		$fail = get_transient( self::PROP_FAIL );
+		if ( is_array( $fail ) ) {
+			return new WP_Error( 'sgia_no_property', $fail[0], $fail[1] );
+		}
+		$p = self::detect();
+		if ( is_wp_error( $p ) ) {
+			$d = $p->get_error_data();
+			set_transient( self::PROP_FAIL, [ $p->get_error_message(), is_string( $d ) ? $d : '' ], HOUR_IN_SECONDS );
+		}
+		return $p;
 	}
 
 	/* ------------------------------------------------------------------ *
@@ -121,12 +139,51 @@ final class SGIA_Inspect {
 		if ( ! is_wp_error( $res ) ) {
 			self::bump();
 		}
+		return self::result( $res );
+	}
 
+	/**
+	 * Parallel inspect for the queue. $urls = key => url.
+	 *
+	 * @return array<string|int,array|WP_Error> Same keys.
+	 */
+	public static function inspect_many( array $urls ) {
+		$out  = [];
+		$prop = self::property();
+		if ( is_wp_error( $prop ) ) {
+			foreach ( $urls as $k => $u ) {
+				$out[ $k ] = $prop;
+			}
+			return $out;
+		}
+		$left  = self::remaining();
+		$calls = [];
+		foreach ( $urls as $k => $u ) {
+			if ( $left-- <= 0 ) {
+				$out[ $k ] = new WP_Error( 'sgia_iquota', 'سقف روزانه بررسی ایندکس پر شده است.' );
+				continue;
+			}
+			$calls[ $k ] = [ 'POST', self::ENDPOINT, [ 'inspectionUrl' => $u, 'siteUrl' => $prop, 'languageCode' => 'en-US' ] ];
+		}
+		foreach ( SGIA_API::request_many( $calls ) as $k => $res ) {
+			if ( ! is_wp_error( $res ) ) {
+				self::bump();
+			}
+			$out[ $k ] = self::result( $res );
+		}
+		$ordered = [];
+		foreach ( array_keys( $urls ) as $k ) {
+			$ordered[ $k ] = $out[ $k ];
+		}
+		return $ordered;
+	}
+
+	/** Turn an API response into a result, halting inspection for the day on account-wide errors. */
+	private static function result( $res ) {
 		if ( ! SGIA_API::is_ok( $res ) ) {
 			$code = is_wp_error( $res ) ? 0 : (int) $res['code'];
 			$msg  = SGIA_API::error_text( $res );
 			$hint = self::hint( $res );
-			// Problems that will hit every URL: stop inspecting for today.
 			if ( in_array( $code, [ 401, 403, 429 ], true ) ) {
 				update_option( self::OPT_HALT, [ 'day' => SGIA_API::pacific_day(), 'reason' => $msg . ( $hint ? ' — ' . $hint : '' ) ], false );
 			}

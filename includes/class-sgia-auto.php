@@ -60,14 +60,17 @@ final class SGIA_Auto {
 				return;
 			}
 			$prev  = get_post_meta( $post->ID, SGIA_API::META_URL, true );
-			$moved = $prev && $prev !== $url; // slug changed
+			// Same page in another spelling (%D8 vs %d8, decoded Persian, trailing slash) is not a slug change.
+			$moved = $prev && ! SGIA_Check::same( $prev, $url );
 			update_post_meta( $post->ID, SGIA_API::META_URL, $url );
 
 			if ( $google ) {
 				if ( $moved ) {
 					self::queue( $prev, 'URL_DELETED', $post->ID );
 				}
-				self::queue( $url, 'URL_UPDATED', $post->ID );
+				if ( $moved || ! self::recently_sent( $post->ID, $url ) ) {
+					self::queue( $url, 'URL_UPDATED', $post->ID );
+				}
 			}
 			if ( $inow ) {
 				SGIA_IndexNow::buffer_add( $moved ? [ $prev, $url ] : [ $url ] );
@@ -118,6 +121,17 @@ final class SGIA_Auto {
 		if ( $url && $inow ) {
 			SGIA_IndexNow::buffer_add( [ $url ] );
 		}
+	}
+
+	/**
+	 * Repeated saves of the same published post (quick edits, price/stock updates)
+	 * shouldn't each spend quota: skip if Google accepted this URL in the last 30 minutes.
+	 */
+	private static function recently_sent( $post_id, $url ) {
+		$last = get_post_meta( $post_id, SGIA_API::META_LAST, true );
+		return is_array( $last ) && ! empty( $last['ok'] ) && 'URL_UPDATED' === $last['type']
+			&& time() - (int) $last['time'] < 30 * MINUTE_IN_SECONDS
+			&& SGIA_Check::same( $last['url'], $url );
 	}
 
 	private static function queue( $url, $type, $post_id ) {

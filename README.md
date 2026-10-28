@@ -44,6 +44,8 @@ define( 'SGIA_KEY_FILE', '/home/USER/keys/indexing-service-account.json' );
 SGIA_Queue::import( array $urls, string $source = '' ); // افزودن به صف؛ $source در جدول صف برچسب می‌شود (مثلاً 'gscii')
 SGIA_Queue::lookup( array $urls );                      // url => status, sent_at, added_at, last_code, last_error, source, index_state, coverage, checked_at
 SGIA_Queue::capacity_today();                           // تعداد ارسالی که صف امروز هنوز انجام می‌دهد (۰ اگر متوقف یا خاموش)
+// فیلتر برای تست/پراکسی: آدرس endpointهای گوگل
+add_filter( 'sgia_api_url', function ( $url ) { return $url; } );
 add_action( 'sgia_published', function ( $url, $type, $ok, $code, $source, $post_id ) {}, 10, 6 );
 ```
 
@@ -67,6 +69,7 @@ includes/class-sgia-check.php    بررسی پیش از ارسال (داخلی �
 includes/class-sgia-indexnow.php IndexNow: فایل کلید، ارسال خودکار، ارسال همه صفحات
 includes/class-sgia-report.php   گزارش روزانه، هشدار، سلامت WP-Cron
 includes/class-sgia-stats.php    شمارنده‌های روزانه
+includes/class-sgia-http.php     درخواست‌های هم‌زمان (curl_multi) با همان تنظیمات پراکسی/SSL وردپرس
 includes/class-sgia-admin.php    صفحات مدیریت، AJAX، متاباکس، ستون لیست
 assets/admin.css, admin.js       رابط کاربری
 uninstall.php                    پاک‌سازی داده‌ها هنگام حذف افزونه

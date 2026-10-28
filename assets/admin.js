@@ -118,7 +118,8 @@
 		if (copy) {
 			e.preventDefault();
 			var text = copy.getAttribute('data-sgia-copy');
-			var done = function () { toast('ایمیل کپی شد', 'ok', 'در Search Console با نقش Owner اضافه کنید.'); };
+			var isMail = /@.+\.iam\.gserviceaccount\.com$/.test(text);
+			var done = function () { toast(isMail ? 'ایمیل کپی شد' : 'کپی شد', 'ok', isMail ? 'در Search Console با نقش Owner اضافه کنید.' : ''); };
 			if (navigator.clipboard && window.isSecureContext) {
 				navigator.clipboard.writeText(text).then(done, function () { window.prompt('کپی کنید:', text); });
 			} else {

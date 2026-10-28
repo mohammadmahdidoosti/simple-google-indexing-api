@@ -72,14 +72,56 @@ final class SGIA_Check {
 		return self::pass();
 	}
 
+	/**
+	 * Parallel run() for the queue. $rows = key => [ url, post_id ].
+	 * Own-site pages are fetched 8 at a time so the shop isn't hit by one big burst.
+	 *
+	 * @return array<string|int,array> Same keys.
+	 */
+	public static function run_many( array $rows ) {
+		$s   = SGIA_API::settings();
+		$out = [];
+		$web = [];
+		foreach ( $rows as $k => $r ) {
+			if ( ! $s['precheck'] ) {
+				$out[ $k ] = self::pass();
+				continue;
+			}
+			$i = self::internal( $r[0], (int) $r[1] );
+			if ( ! $i['ok'] || ! $s['precheck_http'] ) {
+				$out[ $k ] = $i;
+				continue;
+			}
+			$web[ $k ] = $r[0];
+		}
+		if ( $web ) {
+			$reqs = [];
+			foreach ( $web as $k => $u ) {
+				$reqs[ $k ] = [ 'url' => $u, 'timeout' => 8, 'redirection' => 0, 'user-agent' => self::UA, 'limit' => 400000, 'headers' => [ 'Accept' => 'text/html' ] ];
+			}
+			// 8 at a time: 15 pages in two rounds, worst case ~16s even if pages hang.
+			foreach ( SGIA_Http::multi( $reqs, 8 ) as $k => $res ) {
+				$out[ $k ] = self::evaluate( $web[ $k ], $res );
+			}
+		}
+		$ordered = [];
+		foreach ( array_keys( $rows ) as $k ) {
+			$ordered[ $k ] = $out[ $k ];
+		}
+		return $ordered;
+	}
+
 	public static function http( $url ) {
-		$res = wp_remote_get( $url, [
+		return self::evaluate( $url, wp_remote_get( $url, [
 			'timeout'             => 10,
 			'redirection'         => 0,
 			'user-agent'          => self::UA,
 			'limit_response_size' => 400000,
 			'headers'             => [ 'Accept' => 'text/html' ],
-		] );
+		] ) );
+	}
+
+	private static function evaluate( $url, $res ) {
 		if ( is_wp_error( $res ) ) {
 			return self::pass( 0, true );
 		}

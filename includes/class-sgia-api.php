@@ -237,7 +237,7 @@ final class SGIA_API {
 				$args['body'] = wp_json_encode( $body );
 			}
 
-			$res = wp_remote_request( $endpoint, $args );
+			$res = wp_remote_request( apply_filters( 'sgia_api_url', $endpoint ), $args );
 			if ( is_wp_error( $res ) ) {
 				return $res;
 			}
@@ -256,6 +256,60 @@ final class SGIA_API {
 			];
 		}
 		return new WP_Error( 'sgia_auth', 'احراز هویت ناموفق بود.' );
+	}
+
+	/**
+	 * Parallel request(): $calls = key => [ method, endpoint, body|null ].
+	 * One token for all; calls answered 401 are retried once with a fresh token.
+	 *
+	 * @return array<string|int,array|WP_Error> Same keys as $calls.
+	 */
+	public static function request_many( array $calls, $concurrency = 15 ) {
+		$out  = [];
+		$todo = $calls;
+		for ( $attempt = 0; $attempt < 2 && $todo; $attempt++ ) {
+			$token = self::access_token( $attempt > 0 );
+			if ( is_wp_error( $token ) ) {
+				foreach ( $todo as $k => $c ) {
+					$out[ $k ] = $token;
+				}
+				$todo = [];
+				break;
+			}
+			$reqs = [];
+			foreach ( $todo as $k => $c ) {
+				$reqs[ $k ] = [
+					'url'     => apply_filters( 'sgia_api_url', $c[1] ),
+					'method'  => $c[0],
+					'timeout' => 20,
+					'headers' => [ 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json' ],
+					'body'    => null === $c[2] ? null : wp_json_encode( $c[2] ),
+				];
+			}
+			$retry = [];
+			foreach ( SGIA_Http::multi( $reqs, $concurrency ) as $k => $res ) {
+				if ( is_wp_error( $res ) ) {
+					$out[ $k ] = $res;
+					continue;
+				}
+				$code = (int) wp_remote_retrieve_response_code( $res );
+				if ( 401 === $code && 0 === $attempt ) {
+					$retry[ $k ] = $todo[ $k ];
+					continue;
+				}
+				$raw       = wp_remote_retrieve_body( $res );
+				$out[ $k ] = [ 'code' => $code, 'body' => json_decode( $raw, true ), 'raw' => $raw ];
+			}
+			if ( $retry ) {
+				delete_transient( self::TOKEN_CACHE );
+			}
+			$todo = $retry;
+		}
+		$ordered = [];
+		foreach ( array_keys( $calls ) as $k ) {
+			$ordered[ $k ] = isset( $out[ $k ] ) ? $out[ $k ] : new WP_Error( 'sgia_auth', 'احراز هویت ناموفق بود.' );
+		}
+		return $ordered;
 	}
 
 	/* ------------------------------------------------------------------ *
@@ -309,13 +363,53 @@ final class SGIA_API {
 			$res = new WP_Error( 'sgia_quota', 'سهمیه روزانه تعیین‌شده در تنظیمات تمام شده است.' );
 		} else {
 			$res = self::request( 'POST', self::PUBLISH_URL, [ 'url' => $url, 'type' => $type ] );
-			if ( ! is_wp_error( $res ) ) {
-				self::bump_quota();
+			if ( self::is_ok( $res ) ) {
+				self::bump_quota(); // only what Google accepted counts toward the daily quota
 			}
 		}
 
 		self::record( $url, $type, $res, $source, $post_id );
 		return $res;
+	}
+
+	/**
+	 * Parallel publish(). $items = key => [ 'url' => …, 'type' => URL_UPDATED|URL_DELETED, 'post_id' => int ].
+	 * Never sends more than the remaining daily quota; each result is logged like publish().
+	 *
+	 * @return array<string|int,array|WP_Error> Same keys as $items.
+	 */
+	public static function publish_many( array $items, $source = 'queue' ) {
+		$out       = [];
+		$calls     = [];
+		$meta      = [];
+		$remaining = self::quota()['remaining'];
+
+		foreach ( $items as $k => $it ) {
+			$type       = ( isset( $it['type'] ) && 'URL_DELETED' === $it['type'] ) ? 'URL_DELETED' : 'URL_UPDATED';
+			$url        = esc_url_raw( trim( (string) $it['url'] ) );
+			$meta[ $k ] = [ $url, $type, isset( $it['post_id'] ) ? (int) $it['post_id'] : 0 ];
+			if ( ! self::valid_url( $url ) ) {
+				$out[ $k ] = new WP_Error( 'sgia_bad_url', 'آدرس نامعتبر است.' );
+			} elseif ( $remaining <= 0 ) {
+				$out[ $k ] = new WP_Error( 'sgia_quota', 'سهمیه روزانه تعیین‌شده در تنظیمات تمام شده است.' );
+			} else {
+				$remaining--;
+				$calls[ $k ] = [ 'POST', self::PUBLISH_URL, [ 'url' => $url, 'type' => $type ] ];
+			}
+		}
+		foreach ( self::request_many( $calls ) as $k => $res ) {
+			$out[ $k ] = $res;
+		}
+
+		$ordered = [];
+		foreach ( array_keys( $items ) as $k ) {
+			if ( isset( $calls[ $k ] ) && self::is_ok( $out[ $k ] ) ) {
+				self::bump_quota();
+			}
+			self::record( $meta[ $k ][0], $meta[ $k ][1], $out[ $k ], $source, $meta[ $k ][2] );
+			$ordered[ $k ] = $out[ $k ];
+		}
+		return $ordered;
 	}
 
 	public static function metadata( $url ) {

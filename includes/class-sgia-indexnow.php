@@ -211,7 +211,15 @@ final class SGIA_IndexNow {
 		$buf = get_option( self::OPT_BUF, [] );
 		delete_option( self::OPT_BUF );
 		if ( is_array( $buf ) && $buf ) {
-			self::submit( $buf, 'auto' );
+			$r = self::submit( $buf, 'auto' );
+			if ( ! $r['ok'] && $r['code'] !== 403 && $r['code'] !== 422 ) {
+				// Temporary failure (network, 429, 5xx): put the URLs back and try again in 15 minutes.
+				$now = get_option( self::OPT_BUF, [] );
+				update_option( self::OPT_BUF, array_slice( array_values( array_unique( array_merge( $buf, is_array( $now ) ? $now : [] ) ) ), -20000 ), false );
+				if ( ! wp_next_scheduled( self::CRON_FLUSH ) ) {
+					wp_schedule_single_event( time() + 15 * MINUTE_IN_SECONDS, self::CRON_FLUSH );
+				}
+			}
 		}
 	}
 

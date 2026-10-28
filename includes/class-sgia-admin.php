@@ -246,7 +246,9 @@ final class SGIA_Admin {
 		$has      = SGIA_API::has_key();
 		$verified = (int) get_option( SGIA_API::OPT_VERIFIED, 0 );
 		$stats    = SGIA_API::stats();
-		$rate     = SGIA_API::recent_rate();
+		$day      = SGIA_Stats::today();
+		$tried    = $day['g_ok'] + $day['g_fail'];
+		$rate     = [ 'ok' => $day['g_ok'], 'total' => $tried, 'rate' => $tried ? (int) round( $day['g_ok'] * 100 / $tried ) : null ];
 		$q        = SGIA_API::quota();
 		$s        = SGIA_API::settings();
 		$recent   = array_slice( SGIA_API::get_log(), 0, 6 );
@@ -290,7 +292,7 @@ final class SGIA_Admin {
 				<span class="sgia-stat__sub">ریست در <?php echo esc_html( self::until( $q['reset_at'] ) ); ?> دیگر</span>
 			</section>
 			<section class="sgia-card sgia-stat">
-				<span class="sgia-stat__label">نرخ موفقیت ۲۴ ساعت</span>
+				<span class="sgia-stat__label">نرخ موفقیت امروز</span>
 				<strong class="sgia-stat__value"><?php echo null === $rate['rate'] ? '—' : esc_html( self::fa( $rate['rate'] ) ) . '<small>٪</small>'; ?></strong>
 				<span class="sgia-stat__sub"><?php echo esc_html( self::fa( $rate['ok'] ) . ' موفق از ' . self::fa( $rate['total'] ) . ' درخواست' ); ?></span>
 			</section>
@@ -641,8 +643,12 @@ final class SGIA_Admin {
 					$seen = (int) get_option( SGIA_Report::OPT_SEEN, 0 );
 					?>
 					<dl class="sgia-kv">
-						<div><dt>اجرای بعدی</dt><dd><?php echo $next ? ( $next < time() ? 'در انتظار WP-Cron' : esc_html( self::until( $next ) . ' دیگر' ) ) : '—'; ?></dd></div>
+						<div><dt>اجرای بعدی</dt><dd><?php echo $next ? ( $next > time() ? esc_html( self::until( $next ) . ' دیگر' ) : ( time() - $next < HOUR_IN_SECONDS ? 'به‌زودی' : 'عقب افتاده' ) ) : '—'; ?></dd></div>
+						<?php $lr = SGIA_Queue::last_run(); ?>
 						<div><dt>آخرین اجرا</dt><dd><?php echo esc_html( $seen ? self::ago( $seen ) : '—' ); ?></dd></div>
+						<?php if ( $lr ) : ?>
+							<div><dt>نتیجه آخرین اجرا</dt><dd><?php echo esc_html( self::fa( $lr['sent'] ) . ' ارسال' . ( $lr['skipped'] ? '، ' . self::fa( $lr['skipped'] ) . ' رد' : '' ) . ( $lr['rechecked'] ? '، ' . self::fa( $lr['rechecked'] ) . ' بررسی' : '' ) . ' در ' . self::fa( $lr['secs'] ) . ' ثانیه' ); ?></dd></div>
+						<?php endif; ?>
 						<div><dt>هر اجرا</dt><dd>حداکثر <?php echo esc_html( self::fa( SGIA_Queue::BATCH ) ); ?> آدرس</dd></div>
 						<div><dt>بررسی پیش از ارسال</dt><dd><?php echo $g['precheck'] ? ( $g['precheck_http'] ? 'کامل' : 'فقط داخلی' ) : 'خاموش'; ?></dd></div>
 						<div><dt>بررسی ایندکس</dt><dd><?php echo esc_html( ( $g['inspect_before'] ? 'پیش از ارسال' : '' ) . ( $g['inspect_before'] && $g['recheck_days'] ? ' + ' : '' ) . ( $g['recheck_days'] ? self::fa( $g['recheck_days'] ) . ' روز بعد' : '' ) ?: 'خاموش' ); ?></dd></div>
@@ -664,7 +670,7 @@ final class SGIA_Admin {
 						''        => [ 'همه', $c['total'] ],
 						'pending' => [ 'در صف', $c['pending'] ],
 						'sent'    => [ 'ارسال‌شده', $c['sent'] ],
-						'indexed' => [ 'ایندکس‌شده', $c['indexed'] + $c['already'] ],
+						'indexed' => [ 'ایندکس‌شده', $c['idx_any'] ],
 						'skipped' => [ 'ردشده', $c['skipped'] ],
 						'failed'  => [ 'ناموفق', $c['failed'] ],
 					];
@@ -948,8 +954,10 @@ final class SGIA_Admin {
 						<span class="sgia-badge <?php echo SGIA_IndexNow::enabled() ? 'sgia-badge--ok' : 'sgia-badge--muted'; ?>"><?php echo SGIA_IndexNow::enabled() ? 'فعال' : 'غیرفعال'; ?></span>
 					</div>
 
-					<?php if ( SGIA_IndexNow::rank_math_conflict() ) : ?>
+					<?php if ( SGIA_IndexNow::rank_math_conflict() && SGIA_IndexNow::enabled() ) : ?>
 						<div class="sgia-alert sgia-alert--warn sgia-alert--tight">ماژول «Instant Indexing» در Rank Math هم IndexNow ارسال می‌کند. برای جلوگیری از ارسال تکراری، یکی از این دو را خاموش کنید.</div>
+					<?php elseif ( SGIA_IndexNow::rank_math_conflict() ) : ?>
+						<p class="sgia-help sgia-help--top">ماژول «Instant Indexing» در Rank Math همین الان IndexNow را ارسال می‌کند؛ لازم نیست اینجا هم فعالش کنید.</p>
 					<?php endif; ?>
 
 					<?php self::switch_row( 'indexnow', $s['indexnow'], 'فعال‌سازی IndexNow' ); ?>
@@ -1005,7 +1013,7 @@ final class SGIA_Admin {
 					<div class="sgia-card__head">
 						<div>
 							<h2>گزارش روزانه و هشدار</h2>
-							<p>هر روز بعد از ریست سهمیه گوگل (حدود ساعت ۱۱:۳۰ به وقت تهران) خلاصه روز قبل ارسال می‌شود.</p>
+							<p>هر روز بعد از ریست سهمیه گوگل (نیمه‌شب Pacific؛ الان ساعت <?php echo esc_html( self::fa( wp_date( 'H:i', SGIA_API::quota()['reset_at'] ) ) ); ?> به وقت سایت، ممکن است تا یک ساعت بعد) خلاصه روز قبل ارسال می‌شود.</p>
 						</div>
 					</div>
 
@@ -1029,7 +1037,7 @@ final class SGIA_Admin {
 						<div class="sgia-field-row">
 							<div class="sgia-field-group sgia-field-group--tight">
 								<label class="sgia-field-group__label" for="sgia-rtoken">توکن ربات</label>
-								<input type="password" id="sgia-rtoken" class="sgia-input" name="report_token" value="<?php echo esc_attr( $s['report_token'] ); ?>" dir="ltr" autocomplete="new-password" placeholder="123456:ABC-...">
+								<input type="password" id="sgia-rtoken" class="sgia-input" name="report_token" value="" dir="ltr" autocomplete="new-password" placeholder="<?php echo esc_attr( $s['report_token'] ? 'ذخیره شده — برای تغییر، توکن جدید را وارد کنید' : '123456:ABC-...' ); ?>">
 							</div>
 							<div class="sgia-field-group sgia-field-group--tight">
 								<label class="sgia-field-group__label" for="sgia-rchat">شناسه چت (chat_id)</label>
@@ -1259,7 +1267,7 @@ final class SGIA_Admin {
 			if ( SGIA_API::is_ok( $res ) ) {
 				$ok++;
 				if ( 'URL_UPDATED' === $type ) {
-					update_post_meta( $id, SGIA_API::META_URL, $url );
+					update_post_meta( $id, SGIA_API::META_URL, get_permalink( $post ) );
 				}
 			} else {
 				$fail++;
@@ -1383,8 +1391,8 @@ final class SGIA_Admin {
 		$post_id  = url_to_postid( $url );
 		$res      = SGIA_API::publish( $url, $api_type, 'manual', $post_id );
 
-		if ( $post_id && 'URL_UPDATED' === $api_type && SGIA_API::is_ok( $res ) ) {
-			update_post_meta( $post_id, SGIA_API::META_URL, $url );
+		if ( $post_id && 'URL_UPDATED' === $api_type && SGIA_API::is_ok( $res ) && get_permalink( $post_id ) ) {
+			update_post_meta( $post_id, SGIA_API::META_URL, get_permalink( $post_id ) );
 		}
 
 		$p          = SGIA_API::payload( $res );
@@ -1439,6 +1447,7 @@ final class SGIA_Admin {
 	public static function ajax_gsc_detect() {
 		self::guard_ajax();
 		delete_transient( SGIA_Inspect::PROP_CACHE );
+		delete_transient( SGIA_Inspect::PROP_FAIL );
 		$p = SGIA_Inspect::detect();
 		if ( is_wp_error( $p ) ) {
 			$d = $p->get_error_data();
@@ -1569,7 +1578,7 @@ final class SGIA_Admin {
 			'report_email'    => $bool( 'report_email' ),
 			'report_email_to' => sanitize_email( $text( 'report_email_to' ) ),
 			'report_msgr'     => $text( 'report_msgr' ),
-			'report_token'    => preg_replace( '/[^A-Za-z0-9:_\-]/', '', $text( 'report_token' ) ),
+			'report_token'    => '' !== $text( 'report_token' ) ? preg_replace( '/[^A-Za-z0-9:_\-]/', '', $text( 'report_token' ) ) : $old['report_token'], // empty field = keep
 			'report_chat'     => preg_replace( '/[^0-9@A-Za-z_\-]/', '', $text( 'report_chat' ) ),
 			'report_api_base' => $base && 0 === strpos( $base, 'https://' ) ? untrailingslashit( $base ) : '',
 			'report_alerts'   => $bool( 'report_alerts' ),
@@ -1589,6 +1598,7 @@ final class SGIA_Admin {
 		}
 		if ( $old['gsc_property'] !== $new['gsc_property'] ) {
 			delete_transient( SGIA_Inspect::PROP_CACHE );
+			delete_transient( SGIA_Inspect::PROP_FAIL );
 			delete_option( SGIA_Inspect::OPT_HALT );
 		}
 		foreach ( [ 'types', 'daily_limit', 'indexnow', 'report_msgr', 'woo_priority' ] as $k ) {

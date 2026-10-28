@@ -1183,3 +1183,5 @@
 .sgia-activity__url--text { direction: rtl; text-align: start; }
 .sgia-table__msg.is-skip > span { color: var(--sgia-warn); }
 .sgia-help code { font-size: 11px; }
+
+.sgia-help--top { margin: 0 0 12px; }
