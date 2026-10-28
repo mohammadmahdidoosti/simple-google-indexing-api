@@ -4,7 +4,7 @@ Tags: google, indexing api, seo, search console, index
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.3.0
+Stable tag: 2.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -40,6 +40,10 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 define( 'SGIA_KEY_FILE', '/path/outside/public_html/key.json' );
 
 == Changelog ==
+
+= 2.3.1 =
+* اگر دو نسخه از افزونه هم‌زمان فعال باشند (مثلاً پوشه قدیمی تغییرنام‌داده اما فعال)، دیگر خطای مهلک رخ نمی‌دهد؛ پیام می‌دهد یکی را غیرفعال کنید
+* حذف یک نسخه وقتی نسخه دیگری هنوز نصب است، تنظیمات، کلید و صف مشترک را پاک نمی‌کند
 
 = 2.3.0 =
 * سرعت صف: بررسی صفحه، بررسی ایندکس و ارسال به گوگل برای هر دسته به‌صورت هم‌زمان انجام می‌شود (روی سایت زنده هر آدرس حدود ۱۱ ثانیه طول می‌کشید و هر اجرا فقط ۲ آدرس می‌فرستاد؛ اکنون تا ۱۵ آدرس در هر اجرا)

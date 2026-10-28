@@ -3,7 +3,7 @@
  * Plugin Name:       Simple Google Indexing API
  * Plugin URI:        https://developers.google.com/search/apis/indexing-api/v3/quickstart
  * Description:       ارسال خودکار و دستی درخواست ایندکس (URL_UPDATED / URL_DELETED) به Google Indexing API با داشبورد، ارسال گروهی، کنترل سهمیه و گزارش کامل.
- * Version:           2.3.0
+ * Version:           2.3.1
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Moh
@@ -19,7 +19,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SGIA_VERSION', '2.3.0' );
+// Another copy of this plugin (e.g. an old folder renamed but still active) is already
+// loaded: don't load twice — that would be a fatal error. Ask to deactivate one copy.
+if ( defined( 'SGIA_VERSION' ) ) {
+	$sgia_dup_file = __FILE__;
+	add_action( 'admin_notices', function () use ( $sgia_dup_file ) {
+		if ( ! current_user_can( 'activate_plugins' ) ) {
+			return;
+		}
+		printf(
+			'<div class="notice notice-error"><p><strong>Simple Google Indexing API:</strong> دو نسخه از این افزونه هم‌زمان فعال است (نسخه در حال اجرا: %1$s). یکی را از صفحه افزونه‌ها <b>غیرفعال</b> کنید. نسخه دوم: <code>%2$s</code></p></div>',
+			esc_html( SGIA_VERSION ),
+			esc_html( plugin_basename( $sgia_dup_file ) )
+		);
+	} );
+	return;
+}
+
+define( 'SGIA_VERSION', '2.3.1' );
 define( 'SGIA_FILE', __FILE__ );
 define( 'SGIA_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SGIA_URL', plugin_dir_url( __FILE__ ) );

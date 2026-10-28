@@ -7,6 +7,17 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
+// Another copy of this plugin is still installed (e.g. an old folder next to the new one):
+// settings, key and queue are shared, so deleting this copy must not wipe them.
+if ( ! function_exists( 'get_plugins' ) ) {
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+}
+foreach ( get_plugins() as $sgia_file => $sgia_data ) {
+	if ( 'Simple Google Indexing API' === $sgia_data['Name'] && dirname( $sgia_file ) !== dirname( WP_UNINSTALL_PLUGIN ) ) {
+		return;
+	}
+}
+
 // IndexNow key file written to the site root (only if it still holds our key).
 $sgia_settings = get_option( 'sgia_settings', [] );
 if ( ! empty( $sgia_settings['indexnow_key'] ) ) {
