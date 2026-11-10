@@ -885,6 +885,27 @@ final class SGIA_Admin {
 					</div>
 				</section>
 
+				<section class="sgia-card" id="sgia-sec-relay">
+					<div class="sgia-card__head">
+						<div>
+							<h2>سرور واسطه</h2>
+							<p>اگر گوگل IP سرور سایت را مسدود کرده (خطای ۴۰۳ «Your client does not have permission»، معمولاً سرور داخل ایران)، درخواست‌ها از یک سرور خارج از ایران فرستاده می‌شوند.</p>
+						</div>
+						<span class="sgia-badge <?php echo SGIA_API::relay_on() ? 'sgia-badge--ok' : ''; ?>"><?php echo SGIA_API::relay_on() ? 'فعال' : 'خاموش'; ?></span>
+					</div>
+					<div class="sgia-field-row">
+						<div class="sgia-field-group">
+							<label class="sgia-field-group__label" for="sgia-relay-url">آدرس واسطه</label>
+							<input type="url" id="sgia-relay-url" class="sgia-input" name="relay_url" value="<?php echo esc_attr( $s['relay_url'] ); ?>" placeholder="https://relay.example.com" dir="ltr">
+						</div>
+						<div class="sgia-field-group">
+							<label class="sgia-field-group__label" for="sgia-relay-key">رمز واسطه</label>
+							<input type="password" id="sgia-relay-key" class="sgia-input" name="relay_key" value="" dir="ltr" autocomplete="new-password" placeholder="<?php echo esc_attr( $s['relay_key'] ? 'ذخیره شده — برای تغییر، رمز جدید را وارد کنید' : 'همان RELAY_KEY سرور واسطه' ); ?>">
+						</div>
+					</div>
+					<p class="sgia-help">خالی گذاشتن «آدرس واسطه» = ارسال مستقیم به گوگل. رمز باید دقیقاً با متغیر <code>RELAY_KEY</code> در سرور واسطه یکی باشد (حداقل ۱۶ کاراکتر). بعد از ذخیره، «تست اتصال» را بزنید.</p>
+				</section>
+
 				<section class="sgia-card" id="sgia-sec-gsc">
 					<div class="sgia-card__head">
 						<div>
@@ -1582,6 +1603,8 @@ final class SGIA_Admin {
 			'report_chat'     => preg_replace( '/[^0-9@A-Za-z_\-]/', '', $text( 'report_chat' ) ),
 			'report_api_base' => $base && 0 === strpos( $base, 'https://' ) ? untrailingslashit( $base ) : '',
 			'report_alerts'   => $bool( 'report_alerts' ),
+			'relay_url'       => SGIA_API::clean_relay_url( $text( 'relay_url' ) ),
+			'relay_key'       => '' !== $text( 'relay_key' ) ? preg_replace( '/\s+/', '', $text( 'relay_key' ) ) : ( '' === trim( $text( 'relay_url' ) ) ? '' : $old['relay_key'] ), // empty field = keep (cleared with the address)
 		] );
 		// phpcs:enable
 		$new = SGIA_API::settings();
@@ -1595,6 +1618,17 @@ final class SGIA_Admin {
 		}
 		if ( ! $new['indexnow'] && $old['indexnow'] ) {
 			SGIA_IndexNow::delete_key_file();
+		}
+		if ( $old['relay_url'] !== $new['relay_url'] || $old['relay_key'] !== $new['relay_key'] ) {
+			// New route to Google: fresh token, and let today's halts retry through it.
+			delete_transient( SGIA_API::TOKEN_CACHE );
+			delete_transient( SGIA_Inspect::PROP_FAIL );
+			delete_option( SGIA_Inspect::OPT_HALT );
+			delete_option( SGIA_Queue::OPT_HALT );
+			$reload = true;
+			if ( '' !== trim( $text( 'relay_url' ) ) && '' === $new['relay_url'] ) {
+				$msg = 'آدرس واسطه باید با https:// شروع شود؛ ذخیره نشد.';
+			}
 		}
 		if ( $old['gsc_property'] !== $new['gsc_property'] ) {
 			delete_transient( SGIA_Inspect::PROP_CACHE );

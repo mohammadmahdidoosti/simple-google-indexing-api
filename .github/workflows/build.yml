@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 20
       - name: JS syntax check
-        run: node --check assets/admin.js
+        run: node --check assets/admin.js && node --check relay/server.js
 
   release:
     needs: lint
@@ -43,7 +43,7 @@ jobs:
       - name: Build installable zip
         run: |
           mkdir -p dist/simple-google-indexing-api
-          rsync -a --exclude '.git' --exclude '.github' --exclude 'dist' --exclude '.gitignore' --exclude 'README.md' ./ dist/simple-google-indexing-api/
+          rsync -a --exclude '.git' --exclude '.github' --exclude 'dist' --exclude '.gitignore' --exclude 'README.md' --exclude 'relay' ./ dist/simple-google-indexing-api/
           cd dist && zip -rq simple-google-indexing-api.zip simple-google-indexing-api
       - uses: softprops/action-gh-release@v2
         with:

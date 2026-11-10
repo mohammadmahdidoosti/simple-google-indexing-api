@@ -4,7 +4,7 @@ Tags: google, indexing api, seo, search console, index
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.3.2
+Stable tag: 2.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -40,6 +40,10 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 define( 'SGIA_KEY_FILE', '/path/outside/public_html/key.json' );
 
 == Changelog ==
+
+= 2.3.3 =
+* سرور واسطه: اگر گوگل IP سرور سایت را مسدود کرده باشد (خطای ۴۰۳ «Your client does not have permission»، مثلاً سرور داخل ایران)، همه درخواست‌ها به گوگل از یک سرور واسطه خارج از ایران فرستاده می‌شوند. سرویس واسطه در پوشه relay مخزن است
+* پیام خطای ۴۰۳ مسدودی گوگل کوتاه و فارسی شد و راه‌حل را می‌گوید
 
 = 2.3.2 =
 * رفع خطای مهلک صف روی هاست‌هایی که توابع curl_multi را غیرفعال کرده‌اند (مثل سایت زنده): در این حالت درخواست‌ها یکی‌یکی و تا جایی که وقت اجرا برسد ارسال می‌شوند

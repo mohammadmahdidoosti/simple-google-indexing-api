@@ -57,6 +57,9 @@ final class SGIA_API {
 			'report_chat'     => '',
 			'report_api_base' => '',
 			'report_alerts'   => 1,
+			// Relay (for servers Google blocks)
+			'relay_url'       => '',
+			'relay_key'       => '',
 		];
 	}
 
@@ -72,7 +75,41 @@ final class SGIA_API {
 		$s['recheck_days']  = max( 0, min( 30, (int) $s['recheck_days'] ) );
 		$s['inspect_limit'] = max( 0, min( 2000, (int) $s['inspect_limit'] ) );
 		$s['report_msgr']   = in_array( $s['report_msgr'], [ 'telegram', 'bale' ], true ) ? $s['report_msgr'] : '';
+		$s['relay_url']     = self::clean_relay_url( $s['relay_url'] );
+		$s['relay_key']     = trim( (string) $s['relay_key'] );
 		return $s;
+	}
+
+	/** https only (http allowed for localhost tests); no trailing slash. */
+	public static function clean_relay_url( $u ) {
+		$u = untrailingslashit( trim( (string) $u ) );
+		if ( '' === $u || ! preg_match( '~^https://[a-z0-9.-]+(:\d+)?(/[^?#]*)?$~i', $u ) && ! preg_match( '~^http://(localhost|127\.0\.0\.1)(:\d+)?(/[^?#]*)?$~i', $u ) ) {
+			return '';
+		}
+		return $u;
+	}
+
+	/** Is a relay configured? */
+	public static function relay_on() {
+		$s = self::settings();
+		return '' !== $s['relay_url'] && '' !== $s['relay_key'];
+	}
+
+	/**
+	 * Route a Google API URL through the relay when one is set.
+	 *
+	 * @return array{0:string,1:array} [ url, extra headers ]
+	 */
+	public static function via( $url ) {
+		$url = apply_filters( 'sgia_api_url', $url );
+		$s   = self::settings();
+		if ( '' === $s['relay_url'] || '' === $s['relay_key'] ) {
+			return [ $url, [] ];
+		}
+		if ( ! preg_match( '~^https://((?:oauth2|indexing|searchconsole|www)\.googleapis\.com)(/.*)$~', $url, $m ) ) {
+			return [ $url, [] ];
+		}
+		return [ $s['relay_url'] . '/' . $m[1] . $m[2], [ 'X-Relay-Key' => $s['relay_key'] ] ];
 	}
 
 	public static function update_settings( array $new ) {
@@ -189,8 +226,10 @@ final class SGIA_API {
 			return new WP_Error( 'sgia_sign', 'امضای JWT ناموفق بود.' );
 		}
 
-		$res = wp_remote_post( self::TOKEN_URL, [
+		list( $turl, $extra ) = self::via( self::TOKEN_URL );
+		$res = wp_remote_post( $turl, [
 			'timeout' => 20,
+			'headers' => $extra,
 			'body'    => [
 				'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
 				'assertion'  => $input . '.' . self::b64url( $signature ),
@@ -203,6 +242,10 @@ final class SGIA_API {
 		$raw  = wp_remote_retrieve_body( $res );
 		$body = json_decode( $raw, true );
 		if ( empty( $body['access_token'] ) ) {
+			$relay = self::relay_error( $res );
+			if ( $relay ) {
+				return new WP_Error( 'sgia_relay', $relay );
+			}
 			$err = isset( $body['error_description'] ) ? $body['error_description'] : ( isset( $body['error'] ) ? $body['error'] : $raw );
 			return new WP_Error( 'sgia_token', 'دریافت توکن از گوگل ناموفق بود: ' . $err );
 		}
@@ -225,19 +268,20 @@ final class SGIA_API {
 				return $token;
 			}
 
+			list( $url, $extra ) = self::via( $endpoint );
 			$args = [
 				'method'  => $method,
 				'timeout' => 20,
-				'headers' => [
+				'headers' => array_merge( [
 					'Authorization' => 'Bearer ' . $token,
 					'Content-Type'  => 'application/json',
-				],
+				], $extra ),
 			];
 			if ( null !== $body ) {
 				$args['body'] = wp_json_encode( $body );
 			}
 
-			$res = wp_remote_request( apply_filters( 'sgia_api_url', $endpoint ), $args );
+			$res = wp_remote_request( $url, $args );
 			if ( is_wp_error( $res ) ) {
 				return $res;
 			}
@@ -278,11 +322,12 @@ final class SGIA_API {
 			}
 			$reqs = [];
 			foreach ( $todo as $k => $c ) {
+				list( $url, $extra ) = self::via( $c[1] );
 				$reqs[ $k ] = [
-					'url'     => apply_filters( 'sgia_api_url', $c[1] ),
+					'url'     => $url,
 					'method'  => $c[0],
 					'timeout' => 20,
-					'headers' => [ 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json' ],
+					'headers' => array_merge( [ 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json' ], $extra ),
 					'body'    => null === $c[2] ? null : wp_json_encode( $c[2] ),
 				];
 			}
@@ -428,10 +473,45 @@ final class SGIA_API {
 		if ( is_wp_error( $res ) ) {
 			return $res->get_error_message();
 		}
+		$relay = self::relay_error( $res );
+		if ( $relay ) {
+			return $relay;
+		}
+		if ( self::blocked_by_google( $res ) ) {
+			return 'HTTP 403: گوگل درخواست را از IP این سرور نپذیرفت (Forbidden).';
+		}
 		if ( ! empty( $res['body']['error']['message'] ) ) {
 			return $res['body']['error']['message'];
 		}
 		return 'HTTP ' . $res['code'] . ( $res['raw'] ? ': ' . wp_strip_all_tags( $res['raw'] ) : '' );
+	}
+
+	/** Persian message when the relay itself (not Google) refused the call, else ''. */
+	public static function relay_error( $res ) {
+		if ( is_wp_error( $res ) ) {
+			return '';
+		}
+		$raw  = is_array( $res ) && isset( $res['raw'] ) ? $res['raw'] : wp_remote_retrieve_body( $res );
+		$code = is_array( $res ) && isset( $res['code'] ) ? (int) $res['code'] : (int) wp_remote_retrieve_response_code( $res );
+		$body = json_decode( (string) $raw, true );
+		$msg  = isset( $body['error']['message'] ) ? (string) $body['error']['message'] : '';
+		if ( 0 !== strpos( $msg, 'Relay' ) ) {
+			return '';
+		}
+		switch ( $code ) {
+			case 403:
+				return 'واسطه رمز را نپذیرفت: «رمز واسطه» در تنظیمات افزونه با RELAY_KEY در سرور واسطه یکی نیست.';
+			case 503:
+				return 'سرور واسطه هنوز تنظیم نشده: متغیر RELAY_KEY را در سرور واسطه وارد و دوباره Deploy کنید.';
+			case 502:
+				return 'سرور واسطه به گوگل نرسید؛ کمی بعد دوباره تلاش کنید.';
+		}
+		return 'خطای سرور واسطه: ' . $msg;
+	}
+
+	/** Google's own HTML 403 page: it refuses this server's IP/country, not the key. */
+	public static function blocked_by_google( $res ) {
+		return ! is_wp_error( $res ) && 403 === (int) $res['code'] && empty( $res['body'] ) && false !== stripos( (string) $res['raw'], 'your client does not have permission' );
 	}
 
 	/** A short Persian hint that tells the user how to fix a failure. */
@@ -451,9 +531,17 @@ final class SGIA_API {
 					}
 					return 'کلید سرویس اکانت را بررسی کنید.';
 				case 'http_request_failed':
-					return 'سرور شما به googleapis.com دسترسی ندارد (فایروال، DNS یا cURL).';
+					return self::relay_on() ? 'سرور سایت به سرور واسطه وصل نشد؛ آدرس واسطه را بررسی کنید.' : 'سرور شما به googleapis.com دسترسی ندارد (فایروال، DNS یا cURL).';
 			}
 			return '';
+		}
+
+		$relay = self::relay_error( $res );
+		if ( $relay ) {
+			return $relay;
+		}
+		if ( self::blocked_by_google( $res ) ) {
+			return self::relay_on() ? 'گوگل سرور واسطه را هم نپذیرفت؛ واسطه باید روی سروری خارج از ایران باشد.' : 'گوگل IP سرور سایت را مسدود کرده (معمولاً سرور داخل ایران). در تنظیمات «سرور واسطه» را وارد کنید.';
 		}
 
 		$msg = strtolower( self::error_text( $res ) );
