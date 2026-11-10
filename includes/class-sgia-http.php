@@ -156,6 +156,11 @@ final class SGIA_Http {
 			'blocking'  => true,
 			'hooks'     => new WP_HTTP_Requests_Hooks( $url, $a ),
 		];
+		// Parallel handles skip 'curl.before_send', so WordPress's http_api_curl
+		// action (used e.g. to pin the relay's IP) would never run for them.
+		$options['hooks']->register( 'curl.before_multi_add', function ( &$handle ) use ( $url, $a ) {
+			do_action_ref_array( 'http_api_curl', [ &$handle, $a, $url ] ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals
+		} );
 		if ( empty( $a['redirection'] ) ) {
 			$options['follow_redirects'] = false;
 		} else {

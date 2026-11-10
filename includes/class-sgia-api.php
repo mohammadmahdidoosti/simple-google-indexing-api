@@ -80,6 +80,46 @@ final class SGIA_API {
 		return $s;
 	}
 
+	public static function init() {
+		add_action( 'http_api_curl', [ __CLASS__, 'pin_relay_ip' ], 10, 3 );
+	}
+
+	/**
+	 * The IP a relay hostname carries in its own name (sslip.io / nip.io style,
+	 * e.g. relay.45.67.139.133.sslip.io), or ''.
+	 */
+	public static function relay_ip( $host ) {
+		if ( preg_match( '/(?:^|[.-])(\d{1,3})[.-](\d{1,3})[.-](\d{1,3})[.-](\d{1,3})\.(?:sslip\.io|nip\.io)$/i', (string) $host, $m ) ) {
+			$ip = $m[1] . '.' . $m[2] . '.' . $m[3] . '.' . $m[4];
+			return filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ? $ip : '';
+		}
+		return '';
+	}
+
+	/**
+	 * Some networks (e.g. servers in Iran) can't resolve sslip.io / nip.io names.
+	 * The IP is in the name anyway, so hand it to cURL and skip DNS for relay calls.
+	 */
+	public static function pin_relay_ip( $handle, $r, $url ) {
+		if ( ! defined( 'CURLOPT_RESOLVE' ) ) {
+			return;
+		}
+		$relay = self::settings()['relay_url'];
+		if ( '' === $relay ) {
+			return;
+		}
+		$host = strtolower( (string) wp_parse_url( $relay, PHP_URL_HOST ) );
+		if ( $host !== strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) ) ) {
+			return;
+		}
+		$ip = self::relay_ip( $host );
+		if ( $ip ) {
+			$port = (int) wp_parse_url( $relay, PHP_URL_PORT );
+			$port = $port ? $port : ( 0 === stripos( $relay, 'http://' ) ? 80 : 443 );
+			curl_setopt( $handle, CURLOPT_RESOLVE, [ $host . ':' . $port . ':' . $ip ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		}
+	}
+
 	/** https only (http allowed for localhost tests); no trailing slash. */
 	public static function clean_relay_url( $u ) {
 		$u = untrailingslashit( trim( (string) $u ) );

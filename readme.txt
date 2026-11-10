@@ -4,7 +4,7 @@ Tags: google, indexing api, seo, search console, index
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.3.3
+Stable tag: 2.3.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -40,6 +40,9 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 define( 'SGIA_KEY_FILE', '/path/outside/public_html/key.json' );
 
 == Changelog ==
+
+= 2.3.4 =
+* سرور واسطه با آدرس sslip.io / nip.io بدون نیاز به DNS وصل می‌شود (سرورهای داخل ایران این آدرس‌ها را resolve نمی‌کنند)؛ برای ارسال هم‌زمان هم
 
 = 2.3.3 =
 * سرور واسطه: اگر گوگل IP سرور سایت را مسدود کرده باشد (خطای ۴۰۳ «Your client does not have permission»، مثلاً سرور داخل ایران)، همه درخواست‌ها به گوگل از یک سرور واسطه خارج از ایران فرستاده می‌شوند. سرویس واسطه در پوشه relay مخزن است
